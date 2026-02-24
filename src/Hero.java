@@ -29,16 +29,36 @@ public class Hero {
     }
 
     // Getters and setters
-    public String getName() { return name; }
-    public HeroClass getHeroClass() { return heroClass; }
-    public int getLevel() { return level; }
-    public int getAttack() { return attack; }
-    public int getDefense() { return defense; }
-    public int getHealthPoints() { return healthPoints; }
-    public int getManaPoints() { return manaPoints; }
-    public int getExperience() { return experience; }
-    public boolean isStunned() { return isStunned; }
-    public boolean isAlive() { return isAlive; }
+    public String getName() {
+        return name;
+    }
+    public HeroClass getHeroClass() {
+        return heroClass;
+    }
+    public int getLevel() {
+        return level;
+    }
+    public int getAttack() {
+        return attack;
+    }
+    public int getDefense() {
+        return defense;
+    }
+    public int getHealthPoints() {
+        return healthPoints;
+    }
+    public int getManaPoints() {
+        return manaPoints;
+    }
+    public int getExperience() {
+        return experience;
+    }
+    public boolean isStunned() {
+        return isStunned;
+    }
+    public boolean isAlive() {
+        return isAlive;
+    }
 
     // Level up method (basic, without class bonuses)
     public void levelUp() {
