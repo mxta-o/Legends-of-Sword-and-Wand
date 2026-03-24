@@ -1,5 +1,6 @@
 package service;
 
+import controller.GameController;
 import model.*;
 import org.junit.jupiter.api.*;
 import persistence.InMemoryLeagueRepository;
@@ -459,5 +460,24 @@ class D2ServiceTest {
         hero.heal(20);
 
         assertEquals(20, healedAmt[0]);
+    }
+
+    @Test
+    @DisplayName("TC-D2-30: Hall of Fame returns profiles sorted by high score")
+    void hallOfFame_sortedByHighScore() {
+        GameController game = new GameController();
+
+        Profile top = game.createProfile("HoF-Top");
+        top.endCampaign(5000);
+        game.save();
+
+        Profile low = game.createProfile("HoF-Low");
+        low.endCampaign(1000);
+        game.save();
+
+        List<Profile> hallOfFame = game.getHallOfFame();
+
+        assertTrue(hallOfFame.size() >= 2);
+        assertEquals("HoF-Top", hallOfFame.get(0).getPlayerName());
     }
 }

@@ -273,12 +273,7 @@ public class GameController {
 
     /** Returns the hall-of-fame (all profiles sorted by high score). */
     public List<Profile> getHallOfFame() {
-        // Delegate to the underlying repo via profileService
-        // For now we return just the current profile if loaded
-        // Full implementation requires profileService.findAllByHighScoreDesc()
-        // which can be added when ProfileService exposes that method.
-        throw new UnsupportedOperationException(
-                "Hall of Fame requires ProfileService.findAllByHighScoreDesc() — add in D3.");
+        return profileService.getHallOfFame();
     }
 
     // -------------------------------------------------------------------------

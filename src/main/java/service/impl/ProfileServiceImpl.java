@@ -6,6 +6,8 @@ import model.Profile;
 import persistence.ProfileRepository;
 import service.ProfileService;
 
+import java.util.List;
+
 /**
  * Concrete implementation of ProfileService.
  *
@@ -46,6 +48,11 @@ public class ProfileServiceImpl implements ProfileService {
         } else {
             repository.insert(profile);
         }
+    }
+
+    @Override
+    public List<Profile> getHallOfFame() {
+        return repository.findAllByHighScoreDesc();
     }
 
     @Override

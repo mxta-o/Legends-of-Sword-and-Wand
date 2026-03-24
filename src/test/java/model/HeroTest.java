@@ -351,5 +351,20 @@ public class HeroTest {
         assertEquals(hero.getCurrentMaxHealth(), hero.getCurrentHealth());
         assertEquals(hero.getCurrentMaxMana(),   hero.getCurrentMana());
     }
+
+    // =========================================================================
+    // 16. Experience penalty reduces progress but not below zero
+    // =========================================================================
+
+    @Test
+    public void testApplyExperiencePenaltyReducesCurrentProgress() {
+        Hero hero = new Hero("Iota", HeroClass.MAGE);
+        hero.gainExperience(500);
+        int before = hero.getExperience();
+
+        hero.applyExperiencePenalty(0.30);
+
+        assertEquals((int) Math.floor(before * 0.70), hero.getExperience());
+    }
 }
 

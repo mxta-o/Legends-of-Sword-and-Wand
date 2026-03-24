@@ -35,7 +35,6 @@ public class CampaignServiceImpl implements CampaignService {
     private static final double BASE_BATTLE_PCT = 0.60;
     private static final double INN_SHIFT_RATE  = 0.03;   // per 10 cumulative levels
     private static final double MAX_BATTLE_PCT  = 0.90;
-    private static final double GOLD_PENALTY    = 0.10;
     private static final double EXP_PENALTY     = 0.30;
 
     private final BattleService battleService;
@@ -169,9 +168,6 @@ public class CampaignServiceImpl implements CampaignService {
     private CampaignResult runInnRoom(Profile profile, int roomNumber) {
         innService.visitInn(profile);
 
-        // Optionally present recruitable heroes — stored in result but no auto-purchase
-        List<Hero> recruitable = innService.getRecruitableHeroes(profile, roomNumber);
-
         return new CampaignResult(CampaignResult.RoomType.INN, roomNumber,
                 false, 0, 0, profile.getActiveParty());
     }
@@ -227,16 +223,7 @@ public class CampaignServiceImpl implements CampaignService {
 
     private void applyExpPenalty(List<Hero> heroes) {
         for (Hero hero : heroes) {
-            int currentExp = hero.getExperience();
-            int penalty    = (int) (currentExp * EXP_PENALTY);
-            // Reduce exp — heroes cannot lose levels, so we can't go below 0
-            // Hero.gainExperience doesn't support negative; we workaround via
-            // the fact that Hero exposes getExperience() but not setExperience().
-            // We apply the conceptual penalty by calling a package-visible
-            // drain — but since Hero lacks that, we document the intent here
-            // and leave the precise implementation to when Hero is extended.
-            // For now: experience penalty is recorded in campaign log only.
-            // TODO: add Hero.drainExperience(int) for precise penalty application.
+            hero.applyExperiencePenalty(EXP_PENALTY);
         }
     }
 

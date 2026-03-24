@@ -414,6 +414,16 @@ public class Hero {
         }
     }
 
+    /**
+     * Reduces current level-progress experience by a percentage.
+     * This does not reduce hero levels and clamps at 0.
+     */
+    public void applyExperiencePenalty(double penaltyFraction) {
+        if (penaltyFraction <= 0) return;
+        int penalty = (int) Math.floor(experience * penaltyFraction);
+        experience = Math.max(0, experience - penalty);
+    }
+
     private int getExpToLevelUp() {
         // Example: Exp(L) = Exp(L-1)+500+75*L+20*L^2
         return 500 + 75 * level + 20 * level * level;

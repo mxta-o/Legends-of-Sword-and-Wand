@@ -4,6 +4,8 @@ import model.Hero;
 import model.HeroClass;
 import model.Profile;
 
+import java.util.List;
+
 /**
  * Service interface for player profile creation and management.
  *
@@ -37,6 +39,11 @@ public interface ProfileService {
      * @param profile the profile to save
      */
     void saveProfile(Profile profile);
+
+    /**
+     * Returns all profiles sorted by high score descending.
+     */
+    List<Profile> getHallOfFame();
 
     /**
      * Creates a new hero and adds them to the profile's active party.
