@@ -1,0 +1,64 @@
+Term Project
+Winter 2026
+	•	Project Description
+Legends of Sword and Wand
+“Alright… Pen? Check! Paper? Check! Chocolate Milk? Check!! Now, where were we? Oh yes! Young Robert Scullion is walking in the forest. It’s not so scary. The sun shines through green leaves, the trees stand tall, the grass feels cool under his feet and smells really nice! It’s a nice spring morning and…”“Oh come on, Jim! Will you take 2 hours setting up the scene? Who do you think you are? Tolkien?!”“Chill Winston!”, said Amy, “D&D is all about the story. You need to get in the mood!”“Wait!”, said Ian, “are we supposed to be Robert Scullion? All of us?!”“Ugh….”, grunted Jim”, “do I need to explain the rules every single time one of you joins the game?!”“I thought you liked the sound of your own voice…”, smirked Winston.“Fiiiiine… But that’s the last time!”, said Jim, faking reluctance…
+“Legends of Sword and Wand” is a tabletop “Dungeons & Dragons” like game. Your goal is to form a party of heroes, level them up and fight against the perils of the world or against other player parties. 
+There are four hero classes:
+	•	Order: The powers of the universe need to be balanced! Balance brings stability, and stability brings prosperity. Within balance you can channel your inner energy and protect those around you. Servants of order have higher intelligence, can heal and protect.Stats per level: +5 mana, +2 defenseSpells or special moves: Protect: cast a shield on all party members for 10% of each hero’s health. Costs 25 mana.Heal: heal the hero with the lowest current health for 25% of their original health points. Costs 35 mana.
+	•	Chaos: The universe expands and cracks. Through the ripples untamed energy flows! Servants of chaos can harness this energy and launch devastating attacks!Stats per level: +3 attack, +5 healthSpells or special moves:Fireball: Launch a fire attack that affects at most three enemy units. Cost 30 mana.Chain lightning: Target all enemy units in order. The first unit receives 100% of the attack damage and every subsequent receives 25% of the previous damage. The order in which enemy units are hit is random starting with the unit the player chooses. Cost 40 mana.
+	•	Warrior: Warriors are the blunt instruments of the world. They can enforce order or cause chaos. Some are mindless brutes, others are intelligent strategist. Who would you choose?Stats per level: +2 attack, +3 defense
+Spells or special moves:Berserker attack: when attacking a unit, damage 2 more units for 25% of the original damage. Cost 60 mana.
+	•	Mage: Those who wield wands should be feared! Who knows what goes in their mind or whom they serve? Will they aid you or hinder you? Powerful spells that can heal or damage, all at the flick of the wand!Stats per level: +5 mana, +1 attackSpells or special moves:Replenish: replenish 30 mana points to all friendly units and 60 to self. Cost 80 mana.
+You start with a hero at level 1, for whom you choose one of the four classes above. As your hero levels up, you can choose a different class to level up or the same. When you level up one class to level 5 you will gain that class’s bonus effect and your growth will be doubled. When you level up a second class to level 5, your class will become a hybrid of the two, granting your hero unique stats or abilities, according to the table below. Note: the hybrid class is now permanent and cannot change no matter how you continue to level up each class. In hybrid classes, you lose the double growth from the specialization class, but you combine the growth of the two classes that are combined.
+
+## Hybrid Class Chart
+
+| Hybrid class effect or special ability | Order | Chaos | Warrior | Mage |
+|----------------------------------------|-------|-------|---------|------|
+| **Order**   | **Priest**  _Heal_ now applies to all friendly units | **Heretic** | **Paladin** | **Prophet** |
+| **Chaos**   | You can now cast _Fire Shield_ instead of _Protect_. Same effect as _Protect_, but if a protected unit is attacked it returns 10% of the damage back to the attacker. | **Invoker**  _Chain Lightning_ now does 50% damage for every subsequent target hit | **Rogue** | **Sorcerer** |
+| **Warrior** | _Berserker attack_ now heals the Paladin for 10% of their original health points before launching the attack | You can now _Sneak Attack_. Every time you attack, there is a 50% chance to perform an additional attack to any enemy unit for 50% of your total damage. | **Knight**  _Berserker attack_ now has 50% stunning the units hit (miss next turn) | **Warlock** |
+| **Mage**    | Friendly spells (_Protect_, _Heal_, _Replenish_) now double their effect. | _Fireball_ now causes double damage to all affected units. | _Mana burn_. Every time you attack a unit, you burn 10% of its total mana points. | **Wizard**  _Replenish_ now costs only 40 mana. |
+
+How do hybrid classes work? With an example…
+You start with Warrior and you reach level 5. Knight becomes your specialization class and your Berserker attack has a chance to stun. Also, every time you level up you gain +4 attack and +6 defense. Then you level up your Mage class to level 5. In this case, you abandon your Knight specialization and you become a Warlock. You no longer stun your enemies, but now you can burn their mana. As a Warlock, every time you gain a level, you also gain +3 attack, +3 defense and +5 mana.
+Remember! Since you lose the benefits of your specialization class when you hybridize, it may not be beneficial to always hybridize… Think carefully!
+Basic Levelling up
+When you first recruit a hero, you start at level 1 and you select a class. Every hero starts with 5 attack, 5 defense, 100 health points and 50 mana points. Every level you gain, your hero gains +1 attack, +1 defense, +5 health points and +2 mana points before class bonuses are applied. Every hero can level up to level 20.
+Battle System: Attack, Defense and Cast
+Parties consist of 1 to 5 members. Every unit acts in order, with the highest level or highest attack unit going first. Once the first unit to act is determined, the teams alternate. Every turn a unit may choose to a) attack, b) defend, c) wait, or d) cast special ability. 
+When a unit attacks, it does damage equal to: UA(attack)-UD(defense) (where UA(attack) is the attack of the unit that attacks and UD(defense) is the defense of the unit that receives the attack). The total damage is removed from the defending unit’s health points plus any shielding if present. 
+When a unit defends, it forfeits its turn without any action. If a unit defends they regain +10 HP and +5 mana.
+When a unit waits, its action is postponed to the end of the turn. If multiple units wait, they act in a FIFO order (first to wait is the first to act when all other units have acted).
+When a unit casts a special ability, their damage (if any) is calculated in the same way as in the basic attack. All other effects are applied after the end of this unit’s action. If the ability spends mana, this is deducted at the beginning of the action (to ensure that mana is enough). If mana is not enough, the unit must select another action.
+If the unit is stunned as a result of a special ability, it is not able to act for one turn.
+The battle ends if all units of one team run out of health points.
+After the battle ends, units with no health points must be resurrected before they can be used in the next battle. Between battles, you can heal your units using food items or replenish their mana using drink items. After the battle ends, units gain experience (see Experience Gain) and you gain gold, which you can use to purchase food or drink (see Inns).
+Experience and Gold Gain
+Every time you win a battle, you can X amount of experience times Y enemy units. The amount of experience you gain per enemy scales according to the enemy’s level. For example, level 1 enemies give you 50 exp per unit. If you fight 3 level 1 enemies, you’ll gain 150 exp in total. Exp per enemy level is awarded according to the simple function Exp(L)=50*L, where L is the enemy’s level. After the battle ends, the experience is divided among the heroes still standing (i.e., those with HP>1). Similarly, gold per enemy is calculated as G(L) = 75*L. 
+The amount of experience needed by your hero to level up is given by the following function: Exp(L) = Exp(L-1)+500+75*L+20*L2When battling other player parties, no experience or gold is gained.
+When you lose a battle, you lose 10% of your gold and 30% of your heroes gained experience in the current level (note: your heroes cannot lose levels) and you return to the last encountered inn.
+Player vs Environment (PvE)In this game mode, the player follows a campaign. In its simplest form the campaign is simply walking through a dungeon. At every room, the player has a chance to encounter an enemy party or an inn. The more powerful the player is the higher the chances to encounter an enemy party. Starting at 60% for battle and 40% for inn, the balance is shifted by 3% for every 10 cumulative hero levels. For example, if you have a party with a cumulative level between 10-20, then the balance of probability is 63% for battle and 37% for inn. For a cumulative level between 90-100 the balance becomes 90%-10%. 
+After 30 rooms, the campaign ends and the game calculates the player’s final score. For every hero level, the player gets 100 points. For every piece of gold, the player gets 10 points. For every bought item (see Inn) the player gets half the price for buying the item times 10. After the campaign ends, the player may choose to save their party to be used for PvP battles (see PvP). A player may save up to 5 teams.
+At the end, the game keeps a hall of fame with the highest scores among the players.
+InnWhen visiting an inn all the player’s heroes are revived, fully healed and their mana replenished.
+They can buy food and drink items accordingly:
+
+## Inn Items
+
+| Item    | Cost  | Effect                        |
+|---------|-------|------------------------------|
+| Bread   | 200g  | +20 HP                       |
+| Cheese  | 500g  | +50 HP                       |
+| Steak   | 1000g | +200 HP                      |
+| Water   | 150g  | +10 mana                     |
+| Juice   | 400g  | +30 mana                     |
+| Wine    | 750g  | +100 mana                    |
+| Elixir  | 2000g | Revive + Full HP + Full mana |
+
+Unemployed heroes frequent inns in the first 10 rooms. Heroes have a random class and they can be a random level between 1-4. Level 1 heroes will join your party for free. After that they will join you for 200g per level. If your party has already 5 heroes, no heroes will be available for recruiting. 
+Enemies
+If a room includes a hostile encounter, the party you will battle is randomly drawn to have between 1-5 units and be between 1-10 levels. The cumulative level of the enemy party scales with your level. For example, if your party has a cumulative level of 5 you are more probable to encounter a party with a cumulative level between 0-5, while if you have a cumulative level of 40, you can encounter an enemy party between 30-40 levels. The enemies’ attack, defense and HP are also scaled accordingly, so that the battle is not too easy or too hard. Enemy units do not have any special abilities or spells. They can only attack, defend or wait (with the same effects as your heroes).
+Player vs Player (PvP)
+In this game mode, players can go up against other players with parties they have built during the PvE campaign. A PvP battle goes in the exact same way as a PvE battle. Winner is the player that has at least one hero standing. At the end, the game keeps a record of every player’s stats (wins and losses) in a league type of competition. Important note: depending on how the PvE campaign goes, the parties selected for PvP may not have the same strength (cumulative level or even the same number of heroes).
