@@ -34,6 +34,7 @@ public class Hero {
     private int shieldAmount; // Active shield HP absorbed before taking real damage
 
     private List<StatusEffect> statusEffects;
+    private final List<HeroObserver> observers = new ArrayList<>();
 
     public Hero(String name, HeroClass heroClass) {
         this.name = name;
@@ -130,6 +131,7 @@ public class Hero {
         } else if (classLevels.get(classType) == 5 && specializationClass != null && hybridClass == null && specializationClass != classType) {
             hybridClass = classType; // Now hybridized
         }
+        notifyLevelUp(level);
     }
 
     /**
@@ -303,6 +305,7 @@ public class Hero {
         if (currentHealth <= 0) {
             currentHealth = 0;
             isAlive = false;
+            notifyDied();
         }
     }
 
@@ -335,6 +338,23 @@ public class Hero {
         }
         return false;
     }
+
+    // -------------------------------------------------------------------------
+    // Observer registration
+    // -------------------------------------------------------------------------
+
+    public void addObserver(HeroObserver observer) {
+        if (observer != null && !observers.contains(observer)) observers.add(observer);
+    }
+
+    public void removeObserver(HeroObserver observer) {
+        observers.remove(observer);
+    }
+
+    private void notifyDied()                   { observers.forEach(o -> o.onHeroDied(this)); }
+    private void notifyRevived()                { observers.forEach(o -> o.onHeroRevived(this)); }
+    private void notifyLevelUp(int newLevel)    { observers.forEach(o -> o.onLevelUp(this, newLevel)); }
+    private void notifyHealed(int amountHealed) { observers.forEach(o -> o.onHeroHealed(this, amountHealed)); }
 
     // -------------------------------------------------------------------------
     // Combat actions
@@ -404,6 +424,7 @@ public class Hero {
         isAlive = true;
         currentHealth = getCurrentMaxHealth();
         currentMana = getCurrentMaxMana();
+        notifyRevived();
     }
 
     public void restoreMana(int amount) {
@@ -411,7 +432,10 @@ public class Hero {
     }
 
     public void heal(int amount) {
+        int before = currentHealth;
         currentHealth = Math.min(currentHealth + amount, getCurrentMaxHealth());
+        int healed = currentHealth - before;
+        if (healed > 0) notifyHealed(healed);
     }
 
     // Getters for specialization/hybrid for testing
