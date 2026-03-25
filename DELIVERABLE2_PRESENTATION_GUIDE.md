@@ -1,10 +1,6 @@
 # Deliverable 2 Presentation Guide
 
-This guide is a practical script and checklist for your final 10-minute submission.
-
-## What You Should Present
-
-Your grading rubric asks for two parts:
+The grading rubric asks for two parts:
 
 1. Demo of the application (max 5 minutes)
 2. Architecture and design presentation (about 5 minutes)
