@@ -28,10 +28,10 @@ Quick commands to run the project tests and the demo.
 mvn test
 ```
 
-- Run only the curated acceptance tests (grader-facing):
+- Run only the curated use-case tests (grader-facing):
 
 ```bash
-mvn -Dtest=service.AcceptanceTests test
+mvn -Dtest=service.UseCaseTests test
 ```
 
 - Run only development tests (dev-only tests are under `src/test/java/development`):
@@ -56,6 +56,6 @@ mvn org.codehaus.mojo:exec-maven-plugin:3.1.0:java -Dexec.mainClass=app.DemoMain
 ```
 
 Notes:
-- The acceptance tests are located at `src/test/java/service/AcceptanceTests.java`.
-- Development-only tests are grouped under `src/test/java/development/` and are intended for local development and debugging; graders can ignore that folder when evaluating the curated suite.
+- The use-case tests are located at `src/test/java/service/UseCaseTests.java`.
+- Development-only tests are grouped under `src/test/java/development/` and are intended for local dev and debugging; this folder can be ignored.
 - If you use an IDE (IntelliJ/Eclipse), you can run tests or the `app.DemoMain` class via the Run menu/context actions.
