@@ -79,7 +79,7 @@ public class LeagueService {
      * Resets the singleton (for use in unit tests ONLY).
      * Not to be called in production code.
      */
-    static void resetForTesting() {
+    public static void resetForTesting() {
         instance = null;
     }
 }

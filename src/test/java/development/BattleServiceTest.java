@@ -1,4 +1,4 @@
-package service;
+package development;
 
 import model.BattleResult;
 import model.Hero;
@@ -16,17 +16,11 @@ public class BattleServiceTest {
 
     private final BattleServiceImpl battleService = new BattleServiceImpl();
 
-    // =========================================================================
-    // 1. Stronger team wins
-    // =========================================================================
-
     @Test
     public void testStrongerTeamWins() {
-        // Team A: one heavily levelled Chaos hero
         Hero strong = new Hero("Strong", HeroClass.CHAOS);
         for (int i = 0; i < 10; i++) strong.levelUp(HeroClass.CHAOS);
 
-        // Team B: one fresh level-1 hero
         Hero weak = new Hero("Weak", HeroClass.ORDER);
 
         BattleResult result = battleService.startBattle(
@@ -37,10 +31,6 @@ public class BattleServiceTest {
         assertTrue(result.getWinningTeam().contains(strong));
         assertTrue(result.getLosingTeam().contains(weak));
     }
-
-    // =========================================================================
-    // 2. Battle ends when a full team is wiped out
-    // =========================================================================
 
     @Test
     public void testBattleEndsWhenTeamWipedOut() {
@@ -53,27 +43,17 @@ public class BattleServiceTest {
                 Collections.singletonList(a),
                 Collections.singletonList(b));
 
-        // At least one side must have no alive heroes
         boolean teamADead = result.getLosingTeam().stream().noneMatch(Hero::isAlive);
         boolean teamBDead = result.getLosingTeam().stream().noneMatch(Hero::isAlive);
         assertTrue(teamADead || teamBDead);
     }
 
-    // =========================================================================
-    // 3. Draw is declared after turn limit
-    // =========================================================================
-
     @Test
     public void testDrawWhenTurnLimitReached() {
-        // Two identically matched heroes that keep defending will exhaust the turn limit
-        // We use a subclass trick: override to make them defend-loop until turn 1000.
-        // Simpler: just give them both 0 ATK relative to each other's DEF by crafting
-        // two ORDER heroes that are heavily defensive — they'll regenerate faster than
-        // they take damage. Use enough levels so neither can kill the other in 1000 turns.
         Hero a = new Hero("TankA", HeroClass.ORDER);
         Hero b = new Hero("TankB", HeroClass.ORDER);
         for (int i = 0; i < 15; i++) {
-            a.levelUp(HeroClass.ORDER); // +2 def/level => massive defense
+            a.levelUp(HeroClass.ORDER);
             b.levelUp(HeroClass.ORDER);
         }
 
@@ -85,10 +65,6 @@ public class BattleServiceTest {
         assertTrue(result.getWinningTeam().isEmpty());
         assertTrue(result.getLosingTeam().isEmpty());
     }
-
-    // =========================================================================
-    // 4. Multi-hero team — all members participate
-    // =========================================================================
 
     @Test
     public void testMultiHeroTeamBattle() {
@@ -110,14 +86,8 @@ public class BattleServiceTest {
         assertFalse(result.isDraw());
     }
 
-    // =========================================================================
-    // 5. Battle result contains references to the correct teams
-    // =========================================================================
-
     @Test
     public void testBattleResultReferencesCorrectTeams() {
-        // Verify the winning and losing team lists in the result correspond
-        // to the teams passed in, not empty/null lists.
         Hero strong = new Hero("Strong2", HeroClass.CHAOS);
         for (int i = 0; i < 8; i++) strong.levelUp(HeroClass.CHAOS);
 
