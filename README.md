@@ -28,7 +28,7 @@ Quick commands to run the project tests and the demo.
 mvn test
 ```
 
-- Run only the curated use-case tests (grader-facing):
+- Run only the use-case tests:
 
 ```bash
 mvn -Dtest=service.UseCaseTests test

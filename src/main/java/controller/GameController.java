@@ -171,6 +171,10 @@ public class GameController {
         requireProfile();
         boolean ok = innService.purchaseItem(currentProfile, item, targetHero);
         if (ok) {
+            // Track campaign item spending for final score when using the default impl.
+            if (campaignService instanceof CampaignServiceImpl campaignImpl) {
+                campaignImpl.recordItemPurchase(currentProfile, item);
+            }
             System.out.printf("Purchased %s for %s.%n", item.getDisplayName(), targetHero.getName());
         } else {
             System.out.printf("Not enough gold to buy %s (need %dg, have %dg).%n",
