@@ -9,6 +9,13 @@ import service.*;
 import service.impl.*;
 
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import persistence.MatchRepository;
+import persistence.SQLiteMatchRepository;
+import persistence.InMemoryMatchRepository;
+import model.PvpMatch;
 
 /**
  * Top-level application controller (Facade).
@@ -36,6 +43,13 @@ public class GameController {
     // Active session state
     private Profile currentProfile;
 
+    // In-memory PvP invite registry: recipient -> list of senders
+    private final Map<String, List<String>> pendingInvites = new ConcurrentHashMap<>();
+
+    // Match persistence (invites + matches). Backed by SQLite when available,
+    // otherwise falls back to a simple in-memory repository.
+    private final MatchRepository matchRepository;
+
     // -------------------------------------------------------------------------
     // Constructor — default (in-memory) wiring for console / tests
     // -------------------------------------------------------------------------
@@ -54,11 +68,26 @@ public class GameController {
             profileRepo = new InMemoryProfileRepository();
         }
 
+        // Try to wire a persistent match repository using the same DB file.
+        MatchRepository mr;
+        try {
+            mr = new SQLiteMatchRepository("game.db");
+        } catch (RuntimeException ex) {
+            System.err.println("SQLiteMatchRepository unavailable, using in-memory fallback: " + ex.getMessage());
+            mr = new InMemoryMatchRepository();
+        }
+        this.matchRepository = mr;
+
         this.battleService   = new BattleServiceImpl();
         this.innService      = new InnServiceImpl();
         this.campaignService = new CampaignServiceImpl(battleService, innService);
         this.profileService  = new ProfileServiceImpl(profileRepo);
         this.leagueService   = LeagueService.getInstance(leagueRepo);
+        // Seed the league table from persisted profile win/loss counts so
+        // the standings reflect historical PvP results even after restarts.
+        try {
+            rebuildLeagueFromProfiles();
+        } catch (Exception ignored) {}
     }
 
     /**
@@ -75,6 +104,8 @@ public class GameController {
         this.campaignService = campaignService;
         this.innService      = innService;
         this.leagueService   = leagueService;
+        // Default to in-memory match repository when dependencies are injected externally.
+        this.matchRepository = new InMemoryMatchRepository();
     }
 
     // -------------------------------------------------------------------------
@@ -134,6 +165,100 @@ public class GameController {
     }
 
     public Profile getCurrentProfile() { return currentProfile; }
+
+    /**
+     * Send a PvP invite from one player to another. Returns true if recipient exists.
+     */
+    public boolean sendPvpInvite(String fromPlayer, String toPlayer) {
+        Profile recipient = profileService.loadProfile(toPlayer);
+        if (recipient == null) return false;
+        // persist invite
+        return matchRepository.insertInvite(fromPlayer, toPlayer);
+    }
+
+    /**
+     * Retrieve and clear pending invites for a player. Returns an empty list if none.
+     */
+    public List<String> pollPvpInvites(String player) {
+        // delegate to repository which will remove polled invites
+        return matchRepository.pollInvitesFor(player);
+    }
+
+    /**
+     * Called when recipient accepts an invite from `fromPlayer`.
+     * Creates a persisted match and sets the first turn to the accepter.
+     */
+    public PvpMatch acceptInviteAndCreateMatch(String fromPlayer, String accepterPlayer,
+                                               int fromPartyIndex, int accepterPartyIndex) {
+        // Verify both profiles exist
+        Profile a = profileService.loadProfile(fromPlayer);
+        Profile b = profileService.loadProfile(accepterPlayer);
+        if (a == null || b == null) throw new IllegalArgumentException("Player profile not found");
+
+        PvpMatch match = new PvpMatch();
+        match.setPlayerA(fromPlayer);
+        match.setPlayerB(accepterPlayer);
+        match.setPartyAIndex(fromPartyIndex);
+        match.setPartyBIndex(accepterPartyIndex);
+        // Accepter makes the first move
+        match.setCurrentTurn(accepterPlayer);
+        match.setStatus(PvpMatch.Status.ACTIVE);
+        match.setCreatedAt(java.time.Instant.now());
+        match.setUpdatedAt(java.time.Instant.now());
+
+        PvpMatch stored = matchRepository.createMatch(match);
+        return stored;
+    }
+
+    /**
+     * Update persisted match state (turn changes, serialized state, status updates).
+     */
+    public void updateMatch(PvpMatch match) {
+        matchRepository.updateMatch(match);
+    }
+
+    /**
+     * List persisted matches involving a given player.
+     */
+    public List<PvpMatch> getMatchesForPlayer(String playerName) {
+        return matchRepository.findMatchesForPlayer(playerName);
+    }
+
+    /** Load a profile without changing the active session. Returns null if not found. */
+    public Profile loadProfileReadonly(String playerName) {
+        return profileService.loadProfile(playerName);
+    }
+
+    /** Forfeit an active match on behalf of a player. Marks the match completed and records win/loss. */
+    public void forfeitMatch(long matchId, String forfeiterPlayer) {
+        PvpMatch m = matchRepository.findById(matchId);
+        if (m == null) throw new IllegalArgumentException("Match not found");
+        if (m.getStatus() != PvpMatch.Status.ACTIVE) throw new IllegalStateException("Match is not active");
+
+        String winner = forfeiterPlayer.equals(m.getPlayerA()) ? m.getPlayerB() : m.getPlayerA();
+
+        // mark completed
+        m.setStatus(PvpMatch.Status.COMPLETED);
+        m.setUpdatedAt(java.time.Instant.now());
+        matchRepository.updateMatch(m);
+
+        // update profiles' PvP records
+        Profile pWinner = profileService.loadProfile(winner);
+        Profile pLoser = profileService.loadProfile(forfeiterPlayer);
+        // Record in league table as well so standings reflect forfeits
+        try {
+            leagueService.recordResult(winner, forfeiterPlayer);
+        } catch (Exception ignored) {}
+
+        if (pWinner != null) {
+            pWinner.addPvpWin();
+            profileService.saveProfile(pWinner);
+        }
+        if (pLoser != null) {
+            pLoser.addPvpLoss();
+            profileService.saveProfile(pLoser);
+        }
+    }
 
     // -------------------------------------------------------------------------
     // Hero management
@@ -396,6 +521,21 @@ public class GameController {
     }
 
     /**
+     * Rebuilds the in-memory league table from persisted profile PvP counts.
+     * This is useful when the league repository is in-memory but profile
+     * win/loss counts are persisted (SQLite). It resets the LeagueService
+     * singleton and seeds it from profiles to keep standings consistent.
+     */
+    public void rebuildLeagueFromProfiles() {
+        // Use the existing leagueService to seed entries from persisted profiles.
+        for (Profile p : profileService.getHallOfFame()) {
+            try {
+                leagueService.seedEntry(p.getPlayerName(), p.getPvpWins(), p.getPvpLosses());
+            } catch (Exception ignored) {}
+        }
+    }
+
+    /**
      * Runs a battle between the active profile's active party and a provided enemy list.
      * Useful for deterministic demo rooms where enemies are hardcoded by the UI.
      *
@@ -445,6 +585,18 @@ public class GameController {
     /** Returns the hall-of-fame (all profiles sorted by high score). */
     public List<Profile> getHallOfFame() {
         return profileService.getHallOfFame();
+    }
+
+    /**
+     * Deletes a profile by name. If the deleted profile is currently active,
+     * the session is cleared.
+     * @param playerName name of the profile to delete
+     */
+    public void deleteProfile(String playerName) {
+        profileService.deleteProfile(playerName);
+        if (currentProfile != null && currentProfile.getPlayerName().equals(playerName)) {
+            currentProfile = null;
+        }
     }
 
     /** Logs out the current profile (clears active session). */

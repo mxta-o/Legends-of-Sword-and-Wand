@@ -103,7 +103,8 @@ public class InnServiceImpl implements InnService {
 
         if (!profile.spendGold(cost)) return false;
 
-        profile.addHeroToParty(candidate);
+        boolean added = profile.addHeroToParty(candidate);
+        if (!added) return false;
         return true;
     }
 

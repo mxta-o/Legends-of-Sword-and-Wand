@@ -66,6 +66,9 @@ public class Hero {
     public String getName()          {
          return name;
     }
+    public void setName(String newName) {
+        if (newName != null && !newName.isBlank()) this.name = newName;
+    }
     public HeroClass getHeroClass()  {
          return heroClass;
     }
@@ -457,6 +460,35 @@ public class Hero {
         currentHealth = Math.min(currentHealth + amount, getCurrentMaxHealth());
         int healed = currentHealth - before;
         if (healed > 0) notifyHealed(healed);
+    }
+
+    /**
+     * Create a deep copy of this Hero suitable for snapshotting into saved parties.
+     * Observers are NOT copied.
+     */
+    public Hero copy() {
+        Hero h = new Hero(this.name, this.heroClass);
+        h.level = this.level;
+        h.experience = this.experience;
+        h.isStunned = this.isStunned;
+        h.isAlive = this.isAlive;
+        h.baseAttack = this.baseAttack;
+        h.baseDefense = this.baseDefense;
+        h.maxHealth = this.maxHealth;
+        h.currentHealth = this.currentHealth;
+        h.maxMana = this.maxMana;
+        h.currentMana = this.currentMana;
+        h.shieldAmount = this.shieldAmount;
+        // Copy classLevels map
+        h.classLevels = new java.util.HashMap<>(this.classLevels);
+        h.specializationClass = this.specializationClass;
+        h.hybridClass = this.hybridClass;
+        // Recreate strategy for the copied hero
+        h.classStrategy = h.createStrategy(h.heroClass);
+        // Copy status effects shallowly (effects are immutable-like or will be reset on revive in practice)
+        h.statusEffects = new java.util.ArrayList<>(this.statusEffects);
+        // Observers intentionally not copied
+        return h;
     }
 
     // Getters for specialization/hybrid for testing

@@ -30,11 +30,15 @@ import javax.swing.JTextField;
 import javax.swing.JPasswordField;
 import javax.swing.SwingUtilities;
 import javax.swing.WindowConstants;
+import javax.swing.BoxLayout;
+import javax.swing.ImageIcon;
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GridLayout;
 import java.awt.GridBagConstraints;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedList;
@@ -42,6 +46,9 @@ import java.util.List;
 import java.util.Queue;
 import java.util.Random;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Playable Swing client for Legends of Sword and Wand.
@@ -72,6 +79,12 @@ public class PlayDemoSwing {
     private JPanel profilesPanel;
     private JPanel campaignPanel;
     private JPanel pvpPanel;
+    private model.PvpMatch currentMatch = null;
+
+    // Mailbox / notification for persisted PvP turns
+    private javax.swing.JLabel mailboxLabel;
+    private ScheduledExecutorService mailboxExecutor;
+    private final Set<Long> notifiedMatchIds = new HashSet<>();
 
     // Action bar controls
     private JPanel actionBarPanel;
@@ -91,6 +104,8 @@ public class PlayDemoSwing {
     private Queue<Hero> battleWaitQueue = new ConcurrentLinkedQueue<>();
     private List<Hero> battlePartySnapshot = new ArrayList<>();
     private List<Hero> battleEnemiesSnapshot = new ArrayList<>();
+    // Which player's saved profile does `battlePartySnapshot` represent (player name), or null.
+    private String battleSnapshotOwner = null;
     // Inn UI pieces
     private JLabel innGoldLabel;
     // Shared shop/inventory UI
@@ -98,7 +113,21 @@ public class PlayDemoSwing {
     private javax.swing.JTextArea sharedItemDescription;
 
     public static void main(String[] args) {
-        SwingUtilities.invokeLater(() -> new PlayDemoSwing().createAndShow());
+        try {
+            // Initialize UI on the EDT but capture any initialization errors to aid debugging.
+            SwingUtilities.invokeLater(() -> {
+                try {
+                    new PlayDemoSwing().createAndShow();
+                } catch (Throwable t) {
+                    t.printStackTrace();
+                    // Rethrow as Error so run.sh still exits non-zero
+                    throw new Error("Initialization failed", t);
+                }
+            });
+        } catch (Throwable t) {
+            t.printStackTrace();
+            throw t instanceof Error ? (Error) t : new Error(t);
+        }
     }
 
     private void createAndShow() {
@@ -144,12 +173,14 @@ public class PlayDemoSwing {
         JButton createProfileBtn = makeActionButton("Create Profile", 14, 140, 36);
         JButton loadProfileBtn = makeActionButton("Load Profile", 14, 140, 36);
         JButton statusBtn = makeActionButton("Show Status", 14, 140, 36);
+        JButton deleteProfileBtn = makeActionButton("Delete Profile", 14, 140, 36);
 
         row1.add(new JLabel("Profile:"));
         row1.add(profileNameField);
         row1.add(createProfileBtn);
         row1.add(loadProfileBtn);
         row1.add(statusBtn);
+        row1.add(deleteProfileBtn);
 
         JPanel row2 = new JPanel(new BorderLayout(8, 8));
         JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT));
@@ -195,6 +226,21 @@ public class PlayDemoSwing {
         createHeroBtn.addActionListener(e -> runUiAction(this::createHero));
         savePartyBtn.addActionListener(e -> runUiAction(this::savePartySlot));
         statusBtn.addActionListener(e -> runUiAction(this::showStatus));
+        deleteProfileBtn.addActionListener(e -> runUiAction(() -> {
+            String name = clean(profileNameField.getText());
+            if (name.isEmpty()) throw new IllegalArgumentException("Enter a profile name to delete.");
+            int res = JOptionPane.showConfirmDialog(null,
+                "Delete profile '" + name + "'? This cannot be undone.",
+                "Confirm Delete",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE);
+            if (res != JOptionPane.YES_OPTION) return;
+            game.deleteProfile(name);
+            appendLog("Deleted profile: " + name);
+            profileNameField.setText("");
+            refreshPartySelectors();
+            setActionBarIdle();
+        }));
 
         panel.add(row1);
         panel.add(row2);
@@ -247,7 +293,7 @@ public class PlayDemoSwing {
         JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
 
         opponentNameField = new JTextField(14);
-        JButton createOpponentAndBattleBtn = makeActionButton("Search", 14, 180, 40);
+        JButton createOpponentAndBattleBtn = makeActionButton("Invite to Duel", 14, 180, 40);
         JButton showLeagueBtn = makeActionButton("Show League Table", 14, 160, 40);
         JButton showHallOfFameBtn = makeActionButton("Show Hall of Fame", 14, 160, 40);
 
@@ -314,6 +360,8 @@ public class PlayDemoSwing {
             loginBtn.addActionListener(e -> runUiAction(this::showAuthDialog));
             right.add(loginBtn);
         } else {
+            if (mailboxLabel == null) mailboxLabel = new JLabel("");
+            right.add(mailboxLabel);
             JButton showStatusSmall = makeActionButton("Status", 12, 100, 28);
             showStatusSmall.addActionListener(e -> runUiAction(this::showStatus));
             right.add(showStatusSmall);
@@ -337,6 +385,7 @@ public class PlayDemoSwing {
             logoutSmall.addActionListener(e -> {
                 try { game.save(); } catch (Exception ignored) {}
                 try { if (game != null) game.logout(); } catch (Exception ignored) {}
+                stopMailboxPoll();
                 appendLog("Logged out.");
                 setActionBarIdle();
                 SwingUtilities.invokeLater(this::showAuthDialog);
@@ -358,6 +407,8 @@ public class PlayDemoSwing {
             loginBtn.addActionListener(e -> runUiAction(this::showAuthDialog));
             right.add(loginBtn);
         } else {
+            if (mailboxLabel == null) mailboxLabel = new JLabel("");
+            right.add(mailboxLabel);
             JButton exitSmall = makeActionButton("Exit", 12, 100, 28);
             exitSmall.addActionListener(e -> runUiAction(() -> {
                 try {
@@ -375,6 +426,7 @@ public class PlayDemoSwing {
             logoutSmall.addActionListener(e -> {
                 try { game.save(); } catch (Exception ignored) {}
                 try { if (game != null) game.logout(); } catch (Exception ignored) {}
+                stopMailboxPoll();
                 appendLog("Logged out.");
                 setActionBarIdle();
                 SwingUtilities.invokeLater(this::showAuthDialog);
@@ -394,10 +446,11 @@ public class PlayDemoSwing {
 
         // Only allow player-controlled heroes to be driven by the action bar.
         // Accept heroes that are either in the active profile's party (campaign)
-        // or present in the current battle snapshot (interactive PvP uses deep copies).
+        // or present in the current battle snapshots (interactive PvP uses deep copies).
         Profile current = game.getCurrentProfile();
         boolean isPlayerHero = (current != null && current.getActiveParty().contains(currentBattleActor))
-                || battlePartySnapshot.contains(currentBattleActor);
+            || battlePartySnapshot.contains(currentBattleActor)
+            || (battleEnemiesSnapshot != null && battleEnemiesSnapshot.contains(currentBattleActor));
         if (!isPlayerHero) {
             appendLog("Action bar controls only apply to player heroes.");
             return;
@@ -455,9 +508,9 @@ public class PlayDemoSwing {
                     currentBattleActor = null;
                 }
                 case "Cast" -> {
-                    List<Ability> castable = currentBattleActor.getClassAbilities().stream().filter(currentBattleActor::canCast).toList();
+                    List<Ability> castable = currentBattleActor.getClassAbilities();
                     if (castable.isEmpty()) {
-                        appendLog(currentBattleActor.getName() + " has no castable abilities and defaults to attack.");
+                        appendLog(currentBattleActor.getName() + " has no abilities and defaults to attack.");
                         List<Hero> alive = aliveMembers(battleEnemiesSnapshot);
                         Hero fallback = alive.isEmpty() ? null : alive.get(0);
                         if (fallback != null) {
@@ -545,6 +598,11 @@ public class PlayDemoSwing {
                             Ability chosen = (Ability) abilityBox.getSelectedItem();
                             Hero tgt = (Hero) targetBox.getSelectedItem();
                             if (chosen != null) {
+                                if (!currentBattleActor.canCast(chosen)) {
+                                    JOptionPane.showMessageDialog(null, "Not enough mana to cast " + chosen.getName() + ".", "Cannot Cast", JOptionPane.WARNING_MESSAGE);
+                                    // don't consume turn
+                                    return;
+                                }
                                 List<Hero> targets = new ArrayList<>();
                                 if (isSupportAbility(chosen)) {
                                     targets.addAll(aliveMembers(battlePartySnapshot));
@@ -604,10 +662,17 @@ public class PlayDemoSwing {
         Profile cur = game.getCurrentProfile();
         // If the current profile has saved campaign progress (paused/previous run),
         // offer a Resume Campaign button instead of starting a new run.
-        if (cur != null && cur.getCampaignRoom() > 0) {
+            if (cur != null && cur.getCampaignRoom() > 0) {
             JButton resumeBig = makeActionButton("Resume Campaign", 28, 280, 80);
             resumeBig.addActionListener(e -> runUiAction(() -> {
                 try {
+                    if (hasActivePvpMatches()) {
+                        JOptionPane.showMessageDialog(null,
+                            "You have an active PvP duel. Finish it before resuming your campaign.",
+                            "Active Duel",
+                            JOptionPane.WARNING_MESSAGE);
+                        return;
+                    }
                     game.resumeCampaign();
                     appendLog("Resumed campaign.");
                     SwingUtilities.invokeLater(this::setActionBarCampaign);
@@ -638,19 +703,52 @@ public class PlayDemoSwing {
                 game.save();
             } catch (Exception ignored) {}
             try { if (game != null) game.logout(); } catch (Exception ignored) {}
+            stopMailboxPoll();
             appendLog("Logged out.");
             // revert to idle action bar and show auth
             setActionBarIdle();
             SwingUtilities.invokeLater(this::showAuthDialog);
         });
-        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        // Right-side area: top row contains Choose Party + Log Out, bottom row
+        // contains Delete Profile stacked directly under Log Out.
+        JPanel right = new JPanel();
+        right.setLayout(new BoxLayout(right, BoxLayout.Y_AXIS));
+
+        JPanel topRow = new JPanel(new FlowLayout(FlowLayout.RIGHT));
         // Show login button when no profile is active (helps when user dismissed auth)
         if (game.getCurrentProfile() == null) {
             JButton loginBtn = makeActionButton("Log In", 12, 100, 28);
             loginBtn.addActionListener(e -> runUiAction(this::showAuthDialog));
-            right.add(loginBtn);
+            topRow.add(loginBtn);
         }
-        right.add(logout);
+        if (mailboxLabel == null) mailboxLabel = new JLabel("");
+        topRow.add(mailboxLabel);
+        JButton choosePartyBtn = makeActionButton("Choose Party", 12, 120, 28);
+        choosePartyBtn.addActionListener(e -> SwingUtilities.invokeLater(this::showPartySelectionDialog));
+        topRow.add(choosePartyBtn);
+        topRow.add(logout);
+
+        JPanel bottomRow = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JButton deleteProfileBtn = makeActionButton("Delete Profile", 14, 120, 36);
+        deleteProfileBtn.addActionListener(e -> runUiAction(() -> {
+            Profile current = game.getCurrentProfile();
+            if (current == null) throw new IllegalArgumentException("No profile loaded.");
+            int res = JOptionPane.showConfirmDialog(null,
+                    "Delete profile '" + current.getPlayerName() + "'? This cannot be undone.",
+                    "Confirm Delete",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.WARNING_MESSAGE);
+            if (res != JOptionPane.YES_OPTION) return;
+            game.deleteProfile(current.getPlayerName());
+            appendLog("Deleted profile: " + current.getPlayerName());
+            // clear UI and show auth dialog so user can create/load another profile
+            setActionBarIdle();
+            SwingUtilities.invokeLater(this::showAuthDialog);
+        }));
+        bottomRow.add(deleteProfileBtn);
+
+        right.add(topRow);
+        right.add(bottomRow);
         actionBarPanel.add(right, BorderLayout.EAST);
 
         actionBarPanel.revalidate();
@@ -660,6 +758,227 @@ public class PlayDemoSwing {
     private void showPvpDialog() {
         if (pvpPanel == null) pvpPanel = buildPvpPanel();
         JOptionPane.showMessageDialog(null, pvpPanel, "PvP / Records", JOptionPane.PLAIN_MESSAGE);
+    }
+
+    private void showPartySelectionDialog() {
+        ensureProfileSelected();
+        Profile profile = game.getCurrentProfile();
+
+        JPanel panel = new JPanel(new BorderLayout(8,8));
+
+        DefaultListModel<String> listModel = new DefaultListModel<>();
+        List<List<Hero>> parties = profile.getSavedParties();
+        int maxSlots = 5;
+
+        JLabel activeLabel = new JLabel();
+        activeLabel.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
+        panel.add(activeLabel, BorderLayout.NORTH);
+
+        Runnable updateActiveLabel = () -> {
+            List<Hero> active = profile.getActiveParty();
+            if (active == null || active.isEmpty()) {
+                activeLabel.setText("Active party: (empty)");
+            } else {
+                StringBuilder a = new StringBuilder();
+                for (int i = 0; i < active.size(); i++) {
+                    if (i > 0) a.append(", ");
+                    a.append(active.get(i).getName());
+                }
+                activeLabel.setText("Active party: " + a.toString());
+            }
+        };
+
+        Runnable updateListModel = () -> {
+            listModel.clear();
+            StringBuilder actSigB = new StringBuilder();
+            List<Hero> act = profile.getActiveParty();
+            for (int k = 0; act != null && k < act.size(); k++) {
+                if (k > 0) actSigB.append('|');
+                actSigB.append(act.get(k).getName());
+            }
+            String activeSig = actSigB.toString();
+
+            for (int i = 0; i < parties.size(); i++) {
+                List<Hero> sp = parties.get(i);
+                StringBuilder sb = new StringBuilder();
+                sb.append("Slot ").append(i).append(": ");
+                for (int j = 0; j < sp.size(); j++) {
+                    if (j > 0) sb.append(", ");
+                    sb.append(sp.get(j).getName());
+                }
+                // Mark slot if it matches the active party signature
+                StringBuilder sig = new StringBuilder();
+                for (int j = 0; j < sp.size(); j++) {
+                    if (j > 0) sig.append('|');
+                    sig.append(sp.get(j).getName());
+                }
+                if (!activeSig.isEmpty() && activeSig.equals(sig.toString())) sb.append("  <- Active (saved)");
+                listModel.addElement(sb.toString());
+            }
+            // add placeholders for empty slots
+            for (int i = parties.size(); i < maxSlots; i++) {
+                listModel.addElement("Slot " + i + ": (empty)");
+            }
+        };
+
+        JList<String> slotList = new JList<>(listModel);
+        slotList.setSelectionMode(javax.swing.ListSelectionModel.SINGLE_SELECTION);
+        slotList.setSelectedIndex(0);
+
+        JTextArea details = new JTextArea(8, 40);
+        details.setEditable(false);
+        details.setLineWrap(true);
+        details.setWrapStyleWord(true);
+
+        Runnable updateDetails = () -> {
+            int idx = slotList.getSelectedIndex();
+            if (idx < 0 || idx >= parties.size()) {
+                details.setText("Empty slot. You can save your current active party here.");
+                return;
+            }
+            List<Hero> sp = parties.get(idx);
+            StringBuilder sb = new StringBuilder();
+            sb.append("Saved party slot ").append(idx).append("\n");
+            for (Hero h : sp) sb.append("- ").append(formatHero(h)).append("\n");
+            details.setText(sb.toString());
+        };
+
+        slotList.addListSelectionListener(e -> updateDetails.run());
+        updateActiveLabel.run();
+        updateListModel.run();
+        updateDetails.run();
+
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JButton useBtn = makeActionButton("Use", 12, 100, 28);
+        JButton saveBtn = makeActionButton("Save/Overwrite", 12, 120, 28);
+        JButton createBtn = makeActionButton("Create New", 12, 120, 28);
+        JButton deleteBtn = makeActionButton("Delete", 12, 100, 28);
+
+        useBtn.addActionListener(ae -> runUiAction(() -> {
+            int idx = slotList.getSelectedIndex();
+            if (idx < 0 || idx >= profile.getSavedParties().size()) {
+                appendLog("No saved party in selected slot to use.");
+                return;
+            }
+            profile.setActiveParty(profile.getSavedParties().get(idx));
+            game.save();
+            appendLog("Loaded saved party slot " + idx + " into active party.");
+            refreshPartySelectors();
+            // reflect active party in the dialog
+            updateActiveLabel.run();
+            updateListModel.run();
+            updateDetails.run();
+        }));
+
+        saveBtn.addActionListener(ae -> runUiAction(() -> {
+            int idx = slotList.getSelectedIndex();
+            if (idx < 0 || idx >= maxSlots) return;
+            // overwrite if exists, otherwise extend until index
+            List<List<Hero>> sp = profile.getSavedParties();
+            List<Hero> copy = new ArrayList<>();
+            for (Hero h : profile.getActiveParty()) {
+                if (h != null) copy.add(h.copy());
+            }
+            if (idx < sp.size()) {
+                sp.set(idx, copy);
+            } else {
+                // fill gaps if necessary
+                while (sp.size() < idx) sp.add(new ArrayList<>());
+                sp.add(copy);
+            }
+            game.save();
+            appendLog("Saved current active party to slot " + idx + ".");
+            // Update dialog in-place to reflect the saved state
+            updateActiveLabel.run();
+            updateListModel.run();
+            slotList.setSelectedIndex(idx);
+            updateDetails.run();
+        }));
+
+        createBtn.addActionListener(ae -> runUiAction(() -> {
+            // Instead of silently saving current party, open the hero creation
+            // dialog so the user can recruit a new hero (same flow as first recruit).
+            // Close the party chooser window first so the recruit dialog appears on top.
+            java.awt.Component src = (java.awt.Component) ae.getSource();
+            java.awt.Window w = SwingUtilities.getWindowAncestor(src);
+            if (w != null) w.dispose();
+
+            // Record saved-party count before recruit; the recruit flow may auto-save
+            // the active party (showStatus() does an auto-save when there are no
+            // existing saved parties). Only save here if the recruit flow didn't.
+            Profile before = game.getCurrentProfile();
+            int savedBefore = before == null ? 0 : before.getSavedParties().size();
+
+            // clear current active party so recruit creates a fresh new party
+            if (before != null) before.setActiveParty(new ArrayList<>());
+
+            SwingUtilities.invokeLater(() -> {
+                showFirstHeroRecruitDialog();
+                Profile p = game.getCurrentProfile();
+                if (p != null) {
+                    int savedAfter = p.getSavedParties().size();
+                    if (savedAfter > savedBefore) {
+                        // recruit flow already saved the party (avoid duplicate)
+                        appendLog("Recruit flow already created saved party slot " + (savedAfter - 1) + ".");
+                    } else {
+                        boolean ok = p.saveParty(new ArrayList<>(p.getActiveParty()));
+                        if (ok) {
+                            try { game.save(); } catch (Exception ignored) {}
+                            appendLog("Created new saved party slot " + (p.getSavedParties().size() - 1) + ".");
+                        } else {
+                            appendLog("Failed to create saved party.");
+                        }
+                    }
+                }
+                // After recruiting and (maybe) saving, re-open the party selection dialog.
+                SwingUtilities.invokeLater(this::showPartySelectionDialog);
+            });
+        }));
+
+        deleteBtn.addActionListener(ae -> runUiAction(() -> {
+            int idx = slotList.getSelectedIndex();
+            if (idx < 0 || idx >= profile.getSavedParties().size()) {
+                appendLog("No saved party in selected slot to delete.");
+                return;
+            }
+            // Remove from model and persist, but update the current dialog in-place
+            profile.getSavedParties().remove(idx);
+            try { game.save(); } catch (Exception ignored) {}
+            appendLog("Deleted saved party slot " + idx + ".");
+
+            // Rebuild listModel from updated parties + placeholders
+            listModel.clear();
+            for (int i = 0; i < parties.size(); i++) {
+                List<Hero> sp = parties.get(i);
+                StringBuilder sb = new StringBuilder();
+                sb.append("Slot ").append(i).append(": ");
+                for (int j = 0; j < sp.size(); j++) {
+                    if (j > 0) sb.append(", ");
+                    sb.append(sp.get(j).getName());
+                }
+                listModel.addElement(sb.toString());
+            }
+            for (int i = parties.size(); i < maxSlots; i++) {
+                listModel.addElement("Slot " + i + ": (empty)");
+            }
+
+            // Adjust selection and details in-place
+            int newSel = Math.min(idx, Math.max(0, parties.size() - 1));
+            slotList.setSelectedIndex(newSel);
+            updateActiveLabel.run();
+            updateDetails.run();
+        }));
+
+        buttons.add(useBtn);
+        buttons.add(saveBtn);
+        buttons.add(createBtn);
+        buttons.add(deleteBtn);
+
+        panel.add(new JScrollPane(slotList), BorderLayout.WEST);
+        panel.add(new JScrollPane(details), BorderLayout.CENTER);
+        panel.add(buttons, BorderLayout.SOUTH);
+
+        JOptionPane.showMessageDialog(null, panel, "Party Selection / Management", JOptionPane.PLAIN_MESSAGE);
     }
 
     /** Factory for consistently-styled action buttons. */
@@ -794,7 +1113,14 @@ public class PlayDemoSwing {
         JButton refreshBtn = makeActionButton("Refresh", 14, 120, 36);
         refreshBtn.addActionListener(ae -> runUiAction(this::refreshRecruits));
         JButton recruitNow = makeActionButton("Recruit", 14, 140, 36);
-        recruitNow.addActionListener(ae -> runUiAction(this::recruitSelectedHero));
+        recruitNow.addActionListener(ae -> {
+            // Close the containing dialog first so the subsequent naming prompt
+            // appears on top instead of being obscured by this dialog.
+            java.awt.Component src = (java.awt.Component) ae.getSource();
+            java.awt.Window w = SwingUtilities.getWindowAncestor(src);
+            if (w != null) w.dispose();
+            runUiAction(this::recruitSelectedHero);
+        });
         bottom.add(refreshBtn);
         bottom.add(recruitNow);
 
@@ -970,9 +1296,83 @@ public class PlayDemoSwing {
         try {
             Profile current = game.getCurrentProfile();
             if (current != null) {
-                SwingUtilities.invokeLater(this::setActionBarPostSignup);
+                // Defer setting the post-signup action bar until after invite/match processing
+                // Do not auto-open the party manager on login; user may choose it via the action bar.
+
+                // Check for incoming PvP invites and present accept/decline dialogs.
+                List<String> invites = game.pollPvpInvites(current.getPlayerName());
+                boolean declinedAnyInvite = false;
+                for (String from : invites) {
+                    int resp = JOptionPane.showConfirmDialog(null,
+                            "Player '" + from + "' has invited you to a duel. Accept?",
+                            "PvP Invite",
+                            JOptionPane.YES_NO_OPTION);
+                    if (resp == JOptionPane.YES_OPTION) {
+                        // Let the recipient pick their saved slot (default 0)
+                        Profile inviter = game.loadProfileReadonly(from);
+                        if (inviter == null || inviter.getSavedParties().isEmpty()) {
+                            appendLog("Invite from " + from + " cannot be fulfilled: inviter has no saved parties.");
+                            continue;
+                        }
+                        String[] slots = new String[Math.max(1, current.getSavedParties().size())];
+                        for (int i = 0; i < slots.length; i++) slots[i] = "Slot " + i;
+                        int sel = JOptionPane.showOptionDialog(null, "Choose your saved party for PvP:", "Select Party",
+                                JOptionPane.DEFAULT_OPTION, JOptionPane.PLAIN_MESSAGE, null, slots, slots[0]);
+                        int yourSlot = sel < 0 ? 0 : sel;
+                        // Start PvP: create a persisted match (accepter makes first move)
+                        try {
+                            model.PvpMatch match = game.acceptInviteAndCreateMatch(from, current.getPlayerName(), 0, yourSlot);
+                            appendLog("Accepted invite from " + from + ". Starting duel (match id=" + match.getId() + ").");
+                            startInteractivePvp(match);
+                        } catch (Exception ex) {
+                            appendLog("Failed to create PvP match: " + ex.getMessage());
+                        }
+                    } else {
+                        appendLog("Declined PvP invite from " + from + ".");
+                        declinedAnyInvite = true;
+                        // ensure user sees the post-signup action bar after declining
+                        SwingUtilities.invokeLater(this::setActionBarPostSignup);
+                    }
+                }
+
+                // Also check for persisted active matches. If it's your turn, resume immediately.
+                try {
+                    if (!declinedAnyInvite) {
+                        List<model.PvpMatch> pendingMatches = game.getMatchesForPlayer(current.getPlayerName());
+                        boolean resumed = false;
+                        boolean waiting = false;
+                        for (model.PvpMatch m : pendingMatches) {
+                            if (m.getStatus() == model.PvpMatch.Status.ACTIVE && current.getPlayerName().equals(m.getCurrentTurn())) {
+                                appendLog("Resuming persisted match id=" + m.getId() + " where it's your turn.");
+                                startInteractivePvp(m);
+                                resumed = true;
+                                break;
+                            }
+                        }
+                        if (!resumed) {
+                            // If there are active matches where it's the opponent's turn, show a minimal PvP-waiting action bar.
+                            for (model.PvpMatch m : pendingMatches) {
+                                if (m.getStatus() == model.PvpMatch.Status.ACTIVE && !current.getPlayerName().equals(m.getCurrentTurn())) {
+                                    appendLog("You are awaiting your opponent's move in match id=" + m.getId() + ".");
+                                    model.PvpMatch waitMatch = m;
+                                    SwingUtilities.invokeLater(() -> setActionBarPvpWaiting(waitMatch));
+                                    waiting = true;
+                                    break;
+                                }
+                            }
+                        }
+                        // If we did not resume or enter the PvP-waiting state, show the usual post-signup action bar.
+                        if (!resumed && !waiting) {
+                            SwingUtilities.invokeLater(this::setActionBarPostSignup);
+                        }
+                    } else {
+                        appendLog("Skipped auto-resume of persisted matches due to declined invite.");
+                        SwingUtilities.invokeLater(this::setActionBarPostSignup);
+                    }
+                } catch (Exception ignored) {}
             }
         } catch (Exception ignored) {}
+                // PvP mailbox notifications removed: do not start poll here.
     }
 
     private void showFirstHeroRecruitDialog() {
@@ -1077,6 +1477,14 @@ public class PlayDemoSwing {
 
     private void startCampaign() {
         ensureProfileSelected();
+        // Block campaign progression if the player has any active PvP duels
+        if (hasActivePvpMatches()) {
+            JOptionPane.showMessageDialog(null,
+                "You have an active PvP duel. Finish it before continuing your campaign.",
+                "Active Duel",
+                JOptionPane.WARNING_MESSAGE);
+            return;
+        }
         game.startCampaign();
         appendLog("Campaign started. 30 rooms total.");
         appendLog("Narrator: You enter the first corridor of the Sword-and-Wand labyrinth.");
@@ -1122,6 +1530,7 @@ public class PlayDemoSwing {
         logout.addActionListener(e -> {
             try { game.save(); } catch (Exception ignored) {}
             try { if (game != null) game.logout(); } catch (Exception ignored) {}
+            stopMailboxPoll();
             appendLog("Logged out.");
             setActionBarIdle();
             SwingUtilities.invokeLater(this::showAuthDialog);
@@ -1138,6 +1547,8 @@ public class PlayDemoSwing {
             }
         }));
         JPanel right = new JPanel(new GridLayout(0,1,4,4));
+        if (mailboxLabel == null) mailboxLabel = new JLabel("");
+        right.add(mailboxLabel);
         right.add(logout);
         right.add(exitBtn);
         actionBarPanel.add(right, BorderLayout.EAST);
@@ -1188,6 +1599,8 @@ public class PlayDemoSwing {
         innGoldLabel = new JLabel();
         updateInnGoldLabel();
         right.add(innGoldLabel);
+        if (mailboxLabel == null) mailboxLabel = new JLabel("");
+        right.add(mailboxLabel);
 
         // Show login button when no profile is active
         if (game.getCurrentProfile() == null) {
@@ -1213,6 +1626,7 @@ public class PlayDemoSwing {
         logout.addActionListener(e -> {
             try { game.save(); } catch (Exception ignored) {}
             try { if (game != null) game.logout(); } catch (Exception ignored) {}
+            stopMailboxPoll();
             appendLog("Logged out.");
             setActionBarIdle();
             SwingUtilities.invokeLater(this::showAuthDialog);
@@ -1224,8 +1638,70 @@ public class PlayDemoSwing {
         actionBarPanel.repaint();
     }
 
+    /** Minimal action bar shown when player is waiting for opponent in an active PvP match. */
+    private void setActionBarPvpWaiting(model.PvpMatch match) {
+        actionBarPanel.removeAll();
+
+        // Center: simple label explaining waiting state
+        JPanel center = new JPanel(new FlowLayout(FlowLayout.CENTER));
+        JLabel waiting = new JLabel("Awaiting opponent (match id=" + match.getId() + ")");
+        center.add(waiting);
+        actionBarPanel.add(center, BorderLayout.CENTER);
+
+        // Right: Status, Forfeit, Log Out
+        JPanel right = new JPanel(new GridLayout(0,1,4,4));
+        JButton statusBtn = makeActionButton("Status", 12, 100, 28);
+        statusBtn.addActionListener(e -> runUiAction(this::showStatus));
+        right.add(statusBtn);
+
+        JButton forfeitBtn = makeActionButton("Forfeit Duel", 12, 120, 28);
+        forfeitBtn.addActionListener(e -> runUiAction(() -> {
+            int ok = JOptionPane.showConfirmDialog(null,
+                "Forfeit duel and record a loss? This will award a win to your opponent.",
+                "Confirm Forfeit",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE);
+            if (ok != JOptionPane.YES_OPTION) return;
+            Profile cur = game.getCurrentProfile();
+            if (cur == null) return;
+            try {
+                game.forfeitMatch(match.getId(), cur.getPlayerName());
+                appendLog("You forfeited match id=" + match.getId() + ". A loss has been recorded.");
+                // After forfeiting, return to normal post-signup action bar
+                SwingUtilities.invokeLater(this::setActionBarPostSignup);
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(null, "Forfeit failed: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+            }
+        }));
+        right.add(forfeitBtn);
+
+        JButton logout = makeActionButton("Log Out", 12, 100, 28);
+        logout.addActionListener(e -> {
+            try { game.save(); } catch (Exception ignored) {}
+            try { if (game != null) game.logout(); } catch (Exception ignored) {}
+            stopMailboxPoll();
+            appendLog("Logged out.");
+            setActionBarIdle();
+            SwingUtilities.invokeLater(this::showAuthDialog);
+        });
+        right.add(logout);
+
+        actionBarPanel.add(right, BorderLayout.EAST);
+        actionBarPanel.revalidate();
+        actionBarPanel.repaint();
+    }
+
     private void enterNextRoom() {
         ensureProfileSelected();
+
+        // Prevent continuing campaign rooms while any active PvP duel is outstanding
+        if (hasActivePvpMatches()) {
+            JOptionPane.showMessageDialog(null,
+                "You have an active PvP duel. Finish it before continuing your campaign.",
+                "Active Duel",
+                JOptionPane.WARNING_MESSAGE);
+            return;
+        }
 
         CampaignEncounter encounter = game.createCampaignEncounter();
         narrateRoomIntro(encounter);
@@ -1570,6 +2046,14 @@ public class PlayDemoSwing {
         List<Ability> castable = enemy.getClassAbilities().stream().filter(enemy::canCast).toList();
         Hero target = firstAlive(party);
 
+        // Defensive: if the chosen target is the same object as the attacker
+        // (possible if lists were mis-wired or heroes share identities), try
+        // to pick another alive target. If none found, abort this action.
+        if (target == enemy) {
+            target = firstAliveExcept(party, enemy);
+            if (target == null) return;
+        }
+
         if (target == null) {
             return;
         }
@@ -1607,6 +2091,14 @@ public class PlayDemoSwing {
         appendLog(enemy.getName() + " attacks " + target.getName() + " for " + dmg + " damage. (ATK "
             + enemy.getCurrentAttack() + " vs DEF " + target.getCurrentDefense() + ")");
         pauseTurn();
+    }
+
+    private Hero firstAliveExcept(List<Hero> list, Hero exclude) {
+        if (list == null) return null;
+        for (Hero h : list) {
+            if (h != null && h.isAlive() && h != exclude) return h;
+        }
+        return null;
     }
 
     private Ability chooseAbility(Hero hero, List<Ability> abilities) {
@@ -1804,7 +2296,32 @@ public class PlayDemoSwing {
             throw new IllegalArgumentException("No recruit candidate selected.");
         }
 
+        // Ask the player if they want to give the recruit a custom name.
+        String defaultName = candidate.getName();
+        String chosenName = (String) JOptionPane.showInputDialog(
+                null,
+                "Enter a name for the recruit (leave blank to keep generated name):",
+                "Name Recruit",
+                JOptionPane.PLAIN_MESSAGE,
+                null,
+                null,
+                defaultName
+        );
+
+        // User cancelled -> abort recruitment
+        if (chosenName == null) {
+            appendLog("Recruit cancelled.");
+            return;
+        }
+
+        // If non-empty, set the candidate's name to the chosen value
+        if (!chosenName.isBlank()) {
+            candidate.setName(chosenName.trim());
+        }
+
         int cost = InnServiceImpl.recruitmentCost(candidate.getLevel());
+        Profile profile = game.getCurrentProfile();
+        int savedBefore = profile.getSavedParties().size();
         boolean ok = game.recruitHero(candidate);
 
         if (ok) {
@@ -1812,6 +2329,24 @@ public class PlayDemoSwing {
             currentRecruitCandidates.remove(candidate);
             refreshRecruitsModelOnly();
             refreshPartySelectors();
+
+            // Avoid creating a duplicate empty slot: if slot 0 exists but is empty
+            // (created earlier by an auto-save), overwrite it. Otherwise append/save.
+            try {
+                List<List<Hero>> saved = profile.getSavedParties();
+                    if (savedBefore == 0) {
+                    savePartySlot();
+                } else if (savedBefore == 1 && saved.get(0).isEmpty()) {
+                    List<Hero> copy = new ArrayList<>();
+                    for (Hero h : profile.getActiveParty()) if (h != null) copy.add(h.copy());
+                    saved.set(0, copy);
+                    game.save();
+                    appendLog("Updated saved party slot 0 to reflect current active party.");
+                } else {
+                    // default: create a new saved slot (if space)
+                    try { savePartySlot(); } catch (Exception ignored) {}
+                }
+            } catch (Exception ignored) {}
         } else {
             appendLog("Recruit failed (insufficient gold or party full).");
         }
@@ -1856,7 +2391,7 @@ public class PlayDemoSwing {
             return;
         }
 
-        Profile existing = game.loadProfile(opponentName);
+        Profile existing = game.loadProfileReadonly(opponentName);
         if (existing == null) {
             JOptionPane.showMessageDialog(null,
                     "No profile named '" + opponentName + "' was found. Did you type their user correctly?",
@@ -1890,50 +2425,295 @@ public class PlayDemoSwing {
         JScrollPane scroll = new JScrollPane(enemyView);
         scroll.setPreferredSize(new java.awt.Dimension(420, 180));
 
-        Object[] options = {"Fight", "Leave"};
+        Object[] options = {"Invite to Duel", "Leave"};
         int choice = JOptionPane.showOptionDialog(
                 null,
                 scroll,
-                "Challenge " + opponentName + "?",
-                JOptionPane.YES_NO_OPTION,
+                "Invite " + opponentName + " to a duel?",
+                JOptionPane.DEFAULT_OPTION,
                 JOptionPane.PLAIN_MESSAGE,
                 null,
                 options,
                 options[0]
         );
 
-        if (choice != JOptionPane.YES_OPTION) {
-            appendLog("PvP cancelled: not fighting " + opponentName + ".");
+        if (choice == 0) {
+            boolean ok = game.sendPvpInvite(playerName, opponentName);
+            if (ok) appendLog("Sent PvP invite to " + opponentName + ". They will see it at next login.");
+            else JOptionPane.showMessageDialog(null, "Unable to send invite: opponent not found.", "Invite Failed", JOptionPane.WARNING_MESSAGE);
             return;
         }
-        // Restore player as the active profile before starting PvP.
-        game.loadProfile(playerName);
 
-        // Run the interactive PvP session on a background thread so the EDT isn't blocked.
+        appendLog("PvP cancelled: not inviting " + opponentName + ".");
+        return;
+    }
+
+    /**
+     * Start an interactive PvP session between two saved-party slots.
+     */
+    private void startInteractivePvp(String playerName, int playerSlot, String opponentName, int opponentSlot) {
+        // close PvP dialog if visible
+        if (pvpPanel != null) {
+            java.awt.Window pvpd = SwingUtilities.getWindowAncestor(pvpPanel);
+            if (pvpd != null) pvpd.dispose();
+        }
+        Profile player = game.loadProfileReadonly(playerName);
+        Profile opponent = game.loadProfileReadonly(opponentName);
+        if (player == null || opponent == null) {
+            appendLog("Cannot start PvP: one of the players no longer exists.");
+            return;
+        }
+        if (player.getSavedParties().size() <= playerSlot || opponent.getSavedParties().size() <= opponentSlot) {
+            appendLog("Cannot start PvP: missing saved party slot.");
+            return;
+        }
+
         setActionBarBattle();
+        // record which player the UI snapshot represents (local caller)
+        this.battleSnapshotOwner = playerName;
         Thread pvpThread = new Thread(() -> {
-            List<Hero> playerParty = deepCopyParty(game.getCurrentProfile().getSavedParty(0));
-            List<Hero> enemyParty  = deepCopyParty(existing.getSavedParties().get(0));
+            try {
+                List<Hero> playerParty = deepCopyParty(player.getSavedParties().get(playerSlot));
+                List<Hero> enemyParty  = deepCopyParty(opponent.getSavedParties().get(opponentSlot));
 
             BattleResult result = runManualPvpInteractive(playerParty, enemyParty);
 
-            // Persist/record the PvP result (controller will update league and save profiles)
             game.recordPvpResult(result, playerName, opponentName, playerParty, enemyParty);
 
-            // Update UI on EDT after battle completes
             SwingUtilities.invokeLater(() -> {
-                if (result.isDraw()) {
-                    appendLog("PvP result: DRAW.");
-                } else {
-                    appendLog("PvP result: " + (result.getWinningTeam().stream().anyMatch(playerParty::contains) ? "YOU WON" : "YOU LOST") + ".");
-                }
+                if (result.isDraw()) appendLog("PvP result: DRAW.");
+                else appendLog("PvP result: " + (result.getWinningTeam().stream().anyMatch(playerParty::contains) ? "YOU WON" : "YOU LOST") + ".");
                 showLeagueTable();
                 showStatus();
                 setActionBarIdle();
             });
+            } finally {
+                // clear snapshot owner when thread finishes
+                this.battleSnapshotOwner = null;
+            }
         }, "pvp-thread");
         pvpThread.start();
-        return;
+    }
+
+    /**
+     * Start an interactive, persisted PvP session driven by a stored {@link model.PvpMatch}.
+     * This runner enforces strict alternating player turns: the match.currentTurn player
+     * acts, then the turn is switched and persisted.
+     */
+    private void startInteractivePvp(model.PvpMatch match) {
+        // close PvP dialog if visible
+        if (pvpPanel != null) {
+            java.awt.Window pvpd = SwingUtilities.getWindowAncestor(pvpPanel);
+            if (pvpd != null) pvpd.dispose();
+        }
+
+        Profile player = game.loadProfileReadonly(match.getPlayerA());
+        Profile opponent = game.loadProfileReadonly(match.getPlayerB());
+        if (player == null || opponent == null) {
+            appendLog("Cannot start persisted PvP: a player no longer exists.");
+            return;
+        }
+        if (player.getSavedParties().size() <= match.getPartyAIndex() || opponent.getSavedParties().size() <= match.getPartyBIndex()) {
+            appendLog("Cannot start persisted PvP: missing saved party slot.");
+            return;
+        }
+
+        setActionBarBattle();
+        // record current active persisted match for the UI/thread to use
+        this.currentMatch = match;
+        Thread pvpThread = new Thread(() -> {
+            try {
+                List<Hero> playerParty = deepCopyParty(player.getSavedParties().get(match.getPartyAIndex()));
+                List<Hero> enemyParty  = deepCopyParty(opponent.getSavedParties().get(match.getPartyBIndex()));
+
+                // If a serialized state exists, prefer it so HP/mana reflect previous turns
+                if (match.getState() != null && match.getState().contains("state:")) {
+                    List<List<Hero>> both = deserializeMatchState(match.getState());
+                    if (both != null && both.size() == 2) {
+                        // both.get(0) corresponds to Player A, both.get(1) to Player B
+                        playerParty = both.get(0);
+                        enemyParty = both.get(1);
+                    }
+                }
+
+                BattleResult result = runManualPvpInteractiveForMatch(match, playerParty, enemyParty);
+
+                if (result != null) {
+                    game.recordPvpResult(result, match.getPlayerA(), match.getPlayerB(), playerParty, enemyParty);
+                    final List<Hero> finalPlayerParty = playerParty;
+                    boolean aWon = !result.isDraw() && result.getWinningTeam().stream().anyMatch(p -> finalPlayerParty.contains(p));
+                    String msg;
+                    if (result.isDraw()) msg = "PvP result: DRAW.";
+                    else msg = "PvP result: " + (aWon ? "PLAYER A WON" : "PLAYER B WON") + ".";
+                    final String finalMsg = msg;
+                    SwingUtilities.invokeLater(() -> {
+                        appendLog(finalMsg);
+                        showLeagueTable();
+                        showStatus();
+                        setActionBarIdle();
+                    });
+                } else {
+                    // Match not finished; local player's move was persisted and control returns to opponent.
+                    SwingUtilities.invokeLater(() -> {
+                        appendLog("Turn saved. Waiting for opponent to make their move.");
+                        setActionBarIdle();
+                    });
+                }
+            } finally {
+                // clear current match context when thread finishes
+                this.currentMatch = null;
+                // clear the snapshot owner so Status no longer shows battle-only values
+                this.battleSnapshotOwner = null;
+            }
+        }, "pvp-thread-persisted");
+        pvpThread.start();
+    }
+
+    /**
+     * Run interactive PvP but enforce strict alternating player turns using the persisted match.
+     */
+    private BattleResult runManualPvpInteractiveForMatch(model.PvpMatch match, List<Hero> party, List<Hero> enemies) {
+        // By convention this method receives `party` as Player A's team and `enemies` as Player B's team.
+        // For the UI we want `battlePartySnapshot` to reflect the local player's team so targets/selectors
+        // operate from the local perspective. If the local logged-in player is Player B, swap the snapshots
+        // used by the UI while keeping the internal battle logic ordering unchanged.
+        battlePartySnapshot = new ArrayList<>(party);
+        battleEnemiesSnapshot = new ArrayList<>(enemies);
+
+        String local = game.getCurrentProfile() == null ? null : game.getCurrentProfile().getPlayerName();
+        if (local != null && local.equals(match.getPlayerB())) {
+            // swap UI perspective so local player's heroes appear in `battlePartySnapshot`
+            battlePartySnapshot = new ArrayList<>(enemies);
+            battleEnemiesSnapshot = new ArrayList<>(party);
+            appendLog("PvP Start (persisted match id=" + match.getId() + ") — local is Player B; UI perspective swapped.");
+        } else {
+            appendLog("PvP Start (persisted match id=" + match.getId() + "): " + party.size() + " vs " + enemies.size() + ".");
+        }
+
+        battleInProgress = true;
+
+        String currentTurnPlayer = match.getCurrentTurn();
+        String playerA = match.getPlayerA();
+        String playerB = match.getPlayerB();
+
+        // Alternate single-hero turns between players until one side is dead
+        while (isTeamAlive(party) && isTeamAlive(enemies)) {
+            appendLog("");
+
+            // pick next alive actor from the team whose turn it is
+            Hero actor = null;
+            boolean actorIsA = currentTurnPlayer.equals(playerA);
+            if (actorIsA) actor = firstAlive(party);
+            else actor = firstAlive(enemies);
+
+            if (actor == null) {
+                appendLog("No available actor for current turn: " + currentTurnPlayer);
+                // switch turn and persist, then return to let opponent resume
+                currentTurnPlayer = actorIsA ? playerB : playerA;
+                match.setCurrentTurn(currentTurnPlayer);
+                game.updateMatch(match);
+                battlePartySnapshot = new ArrayList<>(party);
+                battleEnemiesSnapshot = new ArrayList<>(enemies);
+                return null;
+            }
+
+            if (actor.isStunned()) {
+                appendLog(actor.getName() + " is stunned and misses this turn.");
+                // switch turn and persist, then return to let opponent resume
+                currentTurnPlayer = actorIsA ? playerB : playerA;
+                match.setCurrentTurn(currentTurnPlayer);
+                game.updateMatch(match);
+                battlePartySnapshot = new ArrayList<>(party);
+                battleEnemiesSnapshot = new ArrayList<>(enemies);
+                return null;
+            }
+
+            // If it's the local player's turn, allow them to act; otherwise persist and wait.
+            local = game.getCurrentProfile() == null ? null : game.getCurrentProfile().getPlayerName();
+            if (currentTurnPlayer.equals(local)) {
+                currentBattleActor = actor;
+                playerAwaitingAction = true;
+                appendLog("Your turn: " + actor.getName() + " (use action bar)");
+                while (playerAwaitingAction && actor.isAlive() && isTeamAlive(actorIsA ? enemies : party)) {
+                    try { Thread.sleep(50); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                }
+                currentBattleActor = null;
+
+                // After local action, check if match ended
+                boolean aAlive = isTeamAlive(party);
+                boolean bAlive = isTeamAlive(enemies);
+                if (!aAlive || !bAlive) {
+                    // finalize result
+                    BattleResult result;
+                    if (!aAlive && !bAlive) result = new BattleResult(new java.util.ArrayList<>(), new java.util.ArrayList<>(), true);
+                    else if (aAlive) result = new BattleResult(new ArrayList<>(party), new ArrayList<>(enemies), false);
+                    else result = new BattleResult(new ArrayList<>(enemies), new ArrayList<>(party), false);
+                    match.setStatus(model.PvpMatch.Status.COMPLETED);
+                    match.setState("result:" + (result.isDraw() ? "draw" : (result.getWinningTeam().stream().anyMatch(party::contains) ? "A" : "B")));
+                    game.updateMatch(match);
+                    appendLog(result.isDraw() ? "PvP ended in a draw." : (result.getWinningTeam().stream().anyMatch(party::contains) ? "Player A won." : "Player B won."));
+                    battlePartySnapshot = new ArrayList<>(party);
+                    battleEnemiesSnapshot = new ArrayList<>(enemies);
+                    return result;
+                }
+
+                // otherwise switch turn to opponent and persist the match, then return
+                currentTurnPlayer = actorIsA ? playerB : playerA;
+                match.setCurrentTurn(currentTurnPlayer);
+                // persist the full teams' current state so the opponent resumes with updated HP/mana
+                try {
+                    match.setState("state:" + serializeMatchState(party, enemies));
+                } catch (Exception ex) {
+                    appendLog("Failed to serialize match state: " + ex.getMessage());
+                }
+                game.updateMatch(match);
+                appendLog("Move saved. Waiting for " + currentTurnPlayer + " to play.");
+                battlePartySnapshot = new ArrayList<>(party);
+                battleEnemiesSnapshot = new ArrayList<>(enemies);
+                return null;
+            } else {
+                appendLog("Waiting for opponent " + currentTurnPlayer + " to make their move.");
+                // ensure persisted state reflects currentTurn
+                match.setCurrentTurn(currentTurnPlayer);
+                try {
+                    match.setState("state:" + serializeMatchState(party, enemies));
+                } catch (Exception ex) {
+                    appendLog("Failed to serialize match state: " + ex.getMessage());
+                }
+                game.updateMatch(match);
+                battlePartySnapshot = new ArrayList<>(party);
+                battleEnemiesSnapshot = new ArrayList<>(enemies);
+                return null;
+            }
+        }
+
+        battleInProgress = false;
+        boolean aAlive = isTeamAlive(party);
+        boolean bAlive = isTeamAlive(enemies);
+
+        BattleResult result;
+        if (!aAlive && !bAlive) {
+            result = new BattleResult(new java.util.ArrayList<>(), new java.util.ArrayList<>(), true);
+            match.setStatus(model.PvpMatch.Status.COMPLETED);
+        } else if (aAlive) {
+            result = new BattleResult(new ArrayList<>(party), new ArrayList<>(enemies), false);
+            match.setStatus(model.PvpMatch.Status.COMPLETED);
+        } else {
+            result = new BattleResult(new ArrayList<>(enemies), new ArrayList<>(party), false);
+            match.setStatus(model.PvpMatch.Status.COMPLETED);
+        }
+
+        // persist final status
+        match.setState("result:" + (result.isDraw() ? "draw" : (result.getWinningTeam().stream().anyMatch(party::contains) ? "A" : "B")));
+        try {
+            match.setState(match.getState() + "\nstate:" + serializeMatchState(party, enemies));
+        } catch (Exception ex) {
+            appendLog("Failed to serialize final match state: " + ex.getMessage());
+        }
+        game.updateMatch(match);
+
+        appendLog(result.isDraw() ? "PvP ended in a draw." : (result.getWinningTeam().stream().anyMatch(party::contains) ? "Player A won." : "Player B won."));
+        return result;
     }
 
     /**
@@ -2042,6 +2822,127 @@ public class PlayDemoSwing {
         return out;
     }
 
+    /**
+     * Serialize two teams into a compact text form: each hero on its own line
+     * with tab-separated fields. Player A and Player B blocks are separated
+     * by a double-pipe line "||". This is simple and human-readable.
+     */
+    private String serializeMatchState(List<Hero> partyA, List<Hero> partyB) {
+        StringBuilder sb = new StringBuilder();
+        for (Hero h : partyA) {
+            if (h == null) continue;
+            sb.append(escape(h.getName())).append('\t')
+              .append(h.getHeroClass().name()).append('\t')
+              .append(h.getLevel()).append('\t')
+              .append(h.getCurrentHealth()).append('\t')
+              .append(h.getCurrentMana()).append('\t')
+              .append(h.isAlive()).append('\t')
+              .append(h.getShieldAmount()).append('\n');
+        }
+        sb.append("||\n");
+        for (Hero h : partyB) {
+            if (h == null) continue;
+            sb.append(escape(h.getName())).append('\t')
+              .append(h.getHeroClass().name()).append('\t')
+              .append(h.getLevel()).append('\t')
+              .append(h.getCurrentHealth()).append('\t')
+              .append(h.getCurrentMana()).append('\t')
+              .append(h.isAlive()).append('\t')
+              .append(h.getShieldAmount()).append('\n');
+        }
+        return sb.toString();
+    }
+
+    private String escape(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n");
+    }
+
+    private String unescape(String s) {
+        if (s == null) return "";
+        return s.replace("\\t", "\t").replace("\\n", "\n").replace("\\\\", "\\");
+    }
+
+    /**
+     * Deserialize a match state string produced by `serializeMatchState` into
+     * a two-element list: index 0 = partyA, index 1 = partyB. If parsing fails
+     * return null.
+     */
+    private List<List<Hero>> deserializeMatchState(String state) {
+        if (state == null) return null;
+        String s = state;
+        // allow prefixed markers like "state:" or additional lines
+        int idx = s.indexOf("state:");
+        if (idx >= 0) s = s.substring(idx + "state:".length());
+        String[] parts = s.split("\\n\\|\\|\\n", -1);
+        if (parts.length < 2) return null;
+        List<Hero> a = new ArrayList<>();
+        List<Hero> b = new ArrayList<>();
+        try {
+                for (String line : parts[0].split("\\n")) {
+                if (line.isBlank()) continue;
+                String[] f = line.split("\\t", -1);
+                String name = unescape(f[0]);
+                HeroClass cls = HeroClass.valueOf(f[1]);
+                    Hero h = new Hero(name, cls);
+                    int level = Integer.parseInt(f[2]);
+                    for (int i = 1; i < level; i++) h.levelUp(h.getHeroClass());
+                    // set health/mana by reducing from max as needed
+                    int desiredHp = Integer.parseInt(f[3]);
+                    int maxHp = h.getCurrentMaxHealth();
+                    if (desiredHp < maxHp) {
+                        int dmg = Math.max(0, maxHp - desiredHp);
+                        h.takeDamage(dmg);
+                    }
+                    int desiredMana = Integer.parseInt(f[4]);
+                    int maxMana = h.getCurrentMaxMana();
+                    if (desiredMana < maxMana) {
+                        int use = Math.max(0, maxMana - desiredMana);
+                        h.useMana(use);
+                    }
+                    boolean aliveFlag = Boolean.parseBoolean(f[5]);
+                    if (!aliveFlag && h.isAlive()) {
+                        h.takeDamage(h.getCurrentHealth());
+                    }
+                    h.setShieldAmount(Integer.parseInt(f[6]));
+                a.add(h);
+            }
+            for (String line : parts[1].split("\\n")) {
+                if (line.isBlank()) continue;
+                String[] f = line.split("\\t", -1);
+                String name = unescape(f[0]);
+                HeroClass cls = HeroClass.valueOf(f[1]);
+                    Hero h = new Hero(name, cls);
+                    int level = Integer.parseInt(f[2]);
+                    for (int i = 1; i < level; i++) h.levelUp(h.getHeroClass());
+                    int desiredHp = Integer.parseInt(f[3]);
+                    int maxHp = h.getCurrentMaxHealth();
+                    if (desiredHp < maxHp) {
+                        int dmg = Math.max(0, maxHp - desiredHp);
+                        h.takeDamage(dmg);
+                    }
+                    int desiredMana = Integer.parseInt(f[4]);
+                    int maxMana = h.getCurrentMaxMana();
+                    if (desiredMana < maxMana) {
+                        int use = Math.max(0, maxMana - desiredMana);
+                        h.useMana(use);
+                    }
+                    boolean aliveFlag = Boolean.parseBoolean(f[5]);
+                    if (!aliveFlag && h.isAlive()) {
+                        h.takeDamage(h.getCurrentHealth());
+                    }
+                    h.setShieldAmount(Integer.parseInt(f[6]));
+                b.add(h);
+            }
+        } catch (Exception ex) {
+            return null;
+        }
+        List<List<Hero>> out = new ArrayList<>();
+        out.add(a);
+        out.add(b);
+        return out;
+    }
+
     private void showLeagueTable() {
         List<LeagueEntry> entries = game.getLeagueTable();
         appendLog("=== League Table ===");
@@ -2082,13 +2983,23 @@ public class PlayDemoSwing {
                 + " | High Score: " + profile.getHighScore());
         appendLog("PvP W/L: " + profile.getPvpWins() + "/" + profile.getPvpLosses());
 
-        List<Hero> party = profile.getActiveParty();
-        if (party.isEmpty()) {
+        List<Hero> profileParty = profile.getActiveParty();
+        // Prefer showing the current battle snapshot when present and owned by the current profile
+        List<Hero> displayParty = profileParty;
+        String localName = profile.getPlayerName();
+        if (battlePartySnapshot != null && !battlePartySnapshot.isEmpty() && battleSnapshotOwner != null && battleSnapshotOwner.equals(localName)) {
+            displayParty = battlePartySnapshot;
+        }
+        if (displayParty.isEmpty()) {
             appendLog("Active party: (empty)");
         } else {
             appendLog("Active party:");
-            for (Hero hero : party) {
-                appendLog("- " + formatHero(hero));
+            for (Hero hero : displayParty) {
+                int level = hero.getLevel();
+                int exp = hero.getExperience();
+                int threshold = computeExpToLevelUp(level);
+                int remaining = Math.max(0, threshold - exp);
+                appendLog("- " + formatHero(hero) + " | EXP: " + exp + "/" + threshold + " (" + remaining + " to next)");
             }
         }
 
@@ -2107,15 +3018,45 @@ public class PlayDemoSwing {
         refreshPartySelectors();
     }
 
+    private static int computeExpToLevelUp(int level) {
+        // Match Hero.getExpToLevelUp() formula: 500 + 75*L + 20*L^2
+        return 500 + 75 * level + 20 * level * level;
+    }
+
     private void ensurePlayerHasSavedParty(Profile player) {
-        if (!player.getSavedParties().isEmpty()) {
+        List<List<Hero>> saved = player.getSavedParties();
+        List<Hero> active = player.getActiveParty();
+
+        // If no saved parties exist, create one from the current active party.
+        if (saved.isEmpty()) {
+            boolean savedNow = player.saveParty(new ArrayList<>(active));
+            if (savedNow) {
+                game.save();
+                int slotIndex = player.getSavedParties().size() - 1;
+                appendLog("Auto-saved your active party to slot " + slotIndex + " for PvP.");
+            }
             return;
         }
-        boolean saved = player.saveParty(new ArrayList<>(player.getActiveParty()));
-        if (saved) {
-            game.save();
-            int slotIndex = player.getSavedParties().size() - 1;
-            appendLog("Auto-saved your active party to slot " + slotIndex + " for PvP.");
+
+        // If the first saved slot differs from the current active party (e.g., new recruits),
+        // refresh slot 0 so PvP uses the most recent team.
+        List<Hero> slot0 = saved.get(0);
+        boolean differs = slot0.size() != active.size();
+        if (!differs) {
+            for (int i = 0; i < slot0.size(); i++) {
+                if (!slot0.get(i).getName().equals(active.get(i).getName())) {
+                    differs = true;
+                    break;
+                }
+            }
+        }
+
+        if (differs) {
+            List<Hero> copy = new ArrayList<>();
+            for (Hero h : active) if (h != null) copy.add(h.copy());
+            saved.set(0, copy);
+            try { game.save(); } catch (Exception ignored) {}
+            appendLog("Updated saved party slot 0 to reflect current active party for PvP.");
         }
     }
 
@@ -2133,12 +3074,40 @@ public class PlayDemoSwing {
         itemTargetCombo.setRenderer(new HeroRenderer());
     }
 
+    /** Start background mailbox poll to notify player when it's their turn. Safe to call repeatedly. */
+    private void startMailboxPoll() {
+        // Mailbox polling and modal turn notifications have been removed.
+        // Keep mailbox label empty for compatibility with layouts.
+        if (mailboxLabel == null) mailboxLabel = new JLabel("");
+        SwingUtilities.invokeLater(() -> { if (mailboxLabel != null) mailboxLabel.setText(""); });
+    }
+
+    private void stopMailboxPoll() {
+        // mailbox removed; ensure label is cleared
+        try { if (mailboxExecutor != null) { mailboxExecutor = null; } } catch (Exception ignored) {}
+        notifiedMatchIds.clear();
+        SwingUtilities.invokeLater(() -> { if (mailboxLabel != null) mailboxLabel.setText(""); });
+    }
+
     private void refreshRecruitsModelOnly() {
         DefaultComboBoxModel<Hero> model = new DefaultComboBoxModel<>();
         for (Hero hero : currentRecruitCandidates) {
             model.addElement(hero);
         }
         recruitCombo.setModel(model);
+    }
+
+    /** Return true if the current profile has any persisted PvP matches still active. */
+    private boolean hasActivePvpMatches() {
+        Profile cur = game.getCurrentProfile();
+        if (cur == null) return false;
+        try {
+            List<model.PvpMatch> matches = game.getMatchesForPlayer(cur.getPlayerName());
+            for (model.PvpMatch m : matches) {
+                if (m.getStatus() == model.PvpMatch.Status.ACTIVE) return true;
+            }
+        } catch (Exception ignored) {}
+        return false;
     }
 
     private void ensureProfileSelected() {

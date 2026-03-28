@@ -184,7 +184,13 @@ public class Profile {
      */
     public boolean saveParty(List<Hero> party) {
         if (savedParties.size() >= 5) return false;
-        savedParties.add(new ArrayList<>(party));
+        // Save a deep-copy snapshot of the heroes so saved parties do not
+        // share mutable Hero instances with active party or other saved slots.
+        List<Hero> copy = new ArrayList<>();
+        for (Hero h : party) {
+            if (h != null) copy.add(h.copy());
+        }
+        savedParties.add(copy);
         return true;
     }
 
@@ -209,11 +215,24 @@ public class Profile {
     public List<Hero> getActiveParty() { return activeParty; }
 
     public void setActiveParty(List<Hero> party) {
-        this.activeParty = new ArrayList<>(party);
+        // Load as deep copies so active party modifications don't mutate saved snapshots.
+        this.activeParty = new ArrayList<>();
+        for (Hero h : party) {
+            if (h != null) this.activeParty.add(h.copy());
+        }
     }
 
     public boolean addHeroToParty(Hero hero) {
         if (activeParty.size() >= 5) return false;
+        if (hero == null) return false;
+        // Prevent accidental duplicate inserts of the same hero (same name, class, level)
+        for (Hero h : activeParty) {
+            if (h != null && h.getName().equals(hero.getName())
+                    && h.getHeroClass() == hero.getHeroClass()
+                    && h.getLevel() == hero.getLevel()) {
+                return false;
+            }
+        }
         activeParty.add(hero);
         return true;
     }

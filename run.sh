@@ -5,5 +5,6 @@ set -euo pipefail
 # Use the JVM flag to avoid the native-access warning when running with newer JDKs.
 
 mvn -DskipTests=true dependency:copy-dependencies package
+mvn -DskipTests=true package
 
 java --enable-native-access=ALL-UNNAMED -cp 'target/classes:target/dependency/*' app.PlayDemoSwing

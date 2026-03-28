@@ -266,7 +266,7 @@ public class CampaignServiceImpl implements CampaignService {
         }
         // For demo purposes, make level-1 goblins squishier so battles finish faster.
         for (Hero enemy : enemies) {
-            if (enemy.getLevel() == 1) {
+            if (enemy.getLevel() <= 5) {
                 int desiredHp = 1;
                 int delta = desiredHp - enemy.getCurrentMaxHealth();
                 if (delta != 0) {

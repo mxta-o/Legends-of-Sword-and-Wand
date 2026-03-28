@@ -76,6 +76,17 @@ public class LeagueService {
     }
 
     /**
+     * Seed or update a single league entry with explicit win/loss counts.
+     * Useful when rebuilding an in-memory league from persisted profile data.
+     */
+    public void seedEntry(String playerName, int wins, int losses) {
+        LeagueEntry e = repository.findOrCreate(playerName);
+        for (int i = 0; i < wins; i++) e.recordWin();
+        for (int i = 0; i < losses; i++) e.recordLoss();
+        repository.save(e);
+    }
+
+    /**
      * Resets the singleton (for use in unit tests ONLY).
      * Not to be called in production code.
      */

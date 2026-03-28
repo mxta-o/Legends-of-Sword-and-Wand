@@ -54,4 +54,12 @@ public interface ProfileService {
      * @return the newly created Hero, or null if the party is already full (5 heroes)
      */
     Hero createAndAddHero(Profile profile, String heroName, HeroClass heroClass);
+
+    /**
+     * Deletes a profile and all associated data (saved parties, heroes).
+     * No-op if profile does not exist.
+     *
+     * @param playerName the player's name to delete
+     */
+    void deleteProfile(String playerName);
 }

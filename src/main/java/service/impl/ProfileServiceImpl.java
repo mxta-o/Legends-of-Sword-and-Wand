@@ -59,8 +59,15 @@ public class ProfileServiceImpl implements ProfileService {
     public Hero createAndAddHero(Profile profile, String heroName, HeroClass heroClass) {
         if (profile.getActiveParty().size() >= 5) return null;
         Hero hero = new Hero(heroName, heroClass);
-        profile.addHeroToParty(hero);
+        boolean added = profile.addHeroToParty(hero);
+        if (!added) return null;
         repository.update(profile);
         return hero;
+    }
+
+    @Override
+    public void deleteProfile(String playerName) {
+        if (playerName == null || playerName.isBlank()) return;
+        repository.deleteByName(playerName);
     }
 }
