@@ -55,7 +55,10 @@ public class InnServiceImpl implements InnService {
         if (!profile.spendGold(item.getCost())) {
             return false; // insufficient funds
         }
-        item.applyTo(targetHero);
+        // If no target is provided, interpret as purchase-only (added to inventory in future).
+        if (targetHero != null) {
+            item.applyTo(targetHero);
+        }
         return true;
     }
 

@@ -49,6 +49,11 @@ public class Hero {
         this.classLevels = new HashMap<>();
         this.classLevels.put(heroClass, 1);
         this.classStrategy = createStrategy(heroClass);
+        // Apply per-level bonuses for the initial class level (level 1)
+        this.classStrategy.applyLevelBonus(this);
+        // Ensure current HP/MP reflect any max changes from the class bonus
+        this.currentHealth = getCurrentMaxHealth();
+        this.currentMana = getCurrentMaxMana();
         this.specializationClass = null;
         this.hybridClass = null;
         this.experience = 0;
@@ -366,18 +371,24 @@ public class Hero {
      * Returns the actual damage dealt (after shield absorption) for logging purposes.
      */
     public int attack(Hero target) {
-        int damage = Math.max(0, this.getCurrentAttack() - target.getCurrentDefense());
+        // Ensure an attack always does at least 1 damage to make combat meaningful.
+        int damage = Math.max(1, this.getCurrentAttack() - target.getCurrentDefense());
         target.takeDamage(damage);
         return damage;
     }
 
     /**
      * Defend action — forfeits this hero's turn.
-     * Restores +10 HP and +5 mana as per the game spec.
+     * Restores a portion of HP and mana. Previously this was a fixed
+     * +10 HP / +5 mana which made low-HP enemies effectively immortal when
+     * they could defend repeatedly. This scales restore with the hero's
+     * max values: roughly 10% of max HP and 5% of max mana (minimum 1).
      */
     public void defend() {
-        heal(10);
-        restoreMana(5);
+        int healAmount = Math.max(1, getCurrentMaxHealth() / 10); // ~10% max HP
+        int manaAmount = Math.max(1, getCurrentMaxMana() / 20);   // ~5% max MP
+        heal(healAmount);
+        restoreMana(manaAmount);
     }
 
     /**

@@ -3,6 +3,8 @@ package controller;
 import model.*;
 import persistence.InMemoryLeagueRepository;
 import persistence.InMemoryProfileRepository;
+import persistence.SQLiteProfileRepository;
+import persistence.ProfileRepository;
 import service.*;
 import service.impl.*;
 
@@ -39,8 +41,18 @@ public class GameController {
     // -------------------------------------------------------------------------
 
     public GameController() {
-        InMemoryProfileRepository profileRepo = new InMemoryProfileRepository();
+        // Default to a local SQLite file-backed repository so profiles persist
+        // across application restarts. If SQLite is unavailable at runtime the
+        // controller will gracefully fall back to an in-memory repository.
+        ProfileRepository profileRepo;
         InMemoryLeagueRepository  leagueRepo  = new InMemoryLeagueRepository();
+            try {
+            profileRepo = new SQLiteProfileRepository("game.db");
+        } catch (RuntimeException ex) {
+            System.err.println("SQLiteProfileRepository unavailable, falling back to in-memory: " + ex.getMessage());
+            ex.printStackTrace(System.err);
+            profileRepo = new InMemoryProfileRepository();
+        }
 
         this.battleService   = new BattleServiceImpl();
         this.innService      = new InnServiceImpl();
@@ -82,6 +94,23 @@ public class GameController {
     }
 
     /**
+     * Create a new profile and set a password. Keeps the existing createProfile
+     * method for backward compatibility.
+     */
+    public Profile createProfile(String playerName, String password) {
+        if (password == null || password.isEmpty()) {
+            throw new IllegalArgumentException("Password must not be empty");
+        }
+
+        currentProfile = profileService.createProfile(playerName);
+        if (currentProfile != null) {
+            currentProfile.setPassword(password);
+            profileService.saveProfile(currentProfile);
+        }
+        return currentProfile;
+    }
+
+    /**
      * Loads an existing profile and makes it the active session.
      *
      * @param playerName the existing player's name
@@ -89,6 +118,18 @@ public class GameController {
      */
     public Profile loadProfile(String playerName) {
         currentProfile = profileService.loadProfile(playerName);
+        return currentProfile;
+    }
+
+    /**
+     * Load and authenticate a profile using a plaintext password.
+     * Returns the profile on successful auth, or null on failure.
+     */
+    public Profile loadProfile(String playerName, String password) {
+        Profile p = profileService.loadProfile(playerName);
+        if (p == null) return null;
+        if (!p.verifyPassword(password)) return null;
+        currentProfile = p;
         return currentProfile;
     }
 
@@ -144,6 +185,44 @@ public class GameController {
         return result;
     }
 
+    /**
+     * Generates the next campaign encounter without auto-resolving combat.
+     *
+     * Presentation layers can use this to run manual turn-by-turn PvE battles.
+     */
+    public CampaignEncounter createCampaignEncounter() {
+        requireProfile();
+        if (!(campaignService instanceof CampaignServiceImpl campaignImpl)) {
+            throw new IllegalStateException("Interactive campaign encounters require CampaignServiceImpl.");
+        }
+        return campaignImpl.createEncounter(currentProfile);
+    }
+
+    /**
+     * Resolves a previously generated campaign encounter.
+     *
+     * @param encounter generated encounter
+     * @param battleWon player battle outcome (ignored for INN encounters)
+     * @return resolved room result with rewards/penalties applied
+     */
+    public CampaignResult resolveCampaignEncounter(CampaignEncounter encounter, boolean battleWon) {
+        requireProfile();
+        if (!(campaignService instanceof CampaignServiceImpl campaignImpl)) {
+            throw new IllegalStateException("Interactive campaign encounters require CampaignServiceImpl.");
+        }
+
+        CampaignResult result = campaignImpl.resolveEncounter(currentProfile, encounter, battleWon);
+        System.out.println(result);
+
+        if (campaignService.isCampaignComplete(currentProfile)) {
+            int score = currentProfile.getCampaignScore();
+            System.out.printf("Campaign complete! Final score: %,d%n", score);
+            profileService.saveProfile(currentProfile);
+        }
+
+        return result;
+    }
+
     public boolean isCampaignComplete() {
         requireProfile();
         return campaignService.isCampaignComplete(currentProfile);
@@ -175,7 +254,13 @@ public class GameController {
             if (campaignService instanceof CampaignServiceImpl campaignImpl) {
                 campaignImpl.recordItemPurchase(currentProfile, item);
             }
-            System.out.printf("Purchased %s for %s.%n", item.getDisplayName(), targetHero.getName());
+            if (targetHero == null) {
+                // Add to player's inventory instead of applying immediately
+                currentProfile.addInventoryItem(item);
+                System.out.printf("Purchased %s and added to inventory.%n", item.getDisplayName());
+            } else {
+                System.out.printf("Purchased %s for %s.%n", item.getDisplayName(), targetHero.getName());
+            }
         } else {
             System.out.printf("Not enough gold to buy %s (need %dg, have %dg).%n",
                     item.getDisplayName(), item.getCost(), currentProfile.getGold());
@@ -204,6 +289,8 @@ public class GameController {
             candidate.addObserver(new ConsoleLogObserver());
             System.out.printf("Recruited %s (Level %d %s).%n",
                     candidate.getName(), candidate.getLevel(), candidate.getHeroClass());
+            // Persist profile so recruited hero is saved across restarts
+            profileService.saveProfile(currentProfile);
         }
         return ok;
     }
@@ -237,6 +324,23 @@ public class GameController {
             throw new IllegalArgumentException("One or both party indices are invalid.");
         }
 
+        // Ensure both sides start the PvP fight fully healthy (revived, not stunned,
+        // no active shield) so the battle system runs deterministically.
+        for (Hero h : partyA) {
+            if (h != null) {
+                h.revive();
+                h.setStunned(false);
+                h.setShieldAmount(0);
+            }
+        }
+        for (Hero h : partyB) {
+            if (h != null) {
+                h.revive();
+                h.setStunned(false);
+                h.setShieldAmount(0);
+            }
+        }
+
         BattleResult result = battleService.startBattle(partyA, partyB);
 
         // Record league result (no exp or gold awarded in PvP)
@@ -255,6 +359,69 @@ public class GameController {
 
         profileService.saveProfile(profileA);
         profileService.saveProfile(profileB);
+
+        return result;
+    }
+
+    /**
+     * Records a PvP BattleResult (used when the UI runs an interactive/manual PvP
+     * session and the controller only needs to persist the outcome and update
+     * league stats rather than re-running the battle logic).
+     */
+    public void recordPvpResult(BattleResult result,
+                                String playerAName, String playerBName,
+                                List<Hero> partyA, List<Hero> partyB) {
+        Profile profileA = profileService.loadProfile(playerAName);
+        Profile profileB = profileService.loadProfile(playerBName);
+
+        if (profileA == null || profileB == null) {
+            throw new IllegalArgumentException("One or both player profiles not found.");
+        }
+
+        if (!result.isDraw()) {
+            boolean aWon = result.getWinningTeam().stream().anyMatch(p -> partyA.contains(p));
+            if (aWon) {
+                leagueService.recordResult(playerAName, playerBName);
+                profileA.addPvpWin();
+                profileB.addPvpLoss();
+            } else {
+                leagueService.recordResult(playerBName, playerAName);
+                profileB.addPvpWin();
+                profileA.addPvpLoss();
+            }
+        }
+
+        profileService.saveProfile(profileA);
+        profileService.saveProfile(profileB);
+    }
+
+    /**
+     * Runs a battle between the active profile's active party and a provided enemy list.
+     * Useful for deterministic demo rooms where enemies are hardcoded by the UI.
+     *
+     * @param enemies list of enemy heroes
+     * @return the BattleResult
+     */
+    public BattleResult runCustomBattle(List<Hero> enemies) {
+        requireProfile();
+        BattleResult result = battleService.startBattle(currentProfile.getActiveParty(), enemies);
+
+        // Apply rewards/penalties similar to campaign handling for demo convenience
+        if (!result.isDraw() && result.getWinningTeam() == currentProfile.getActiveParty()) {
+            int totalExp = enemies.stream().mapToInt(h -> 50 * h.getLevel()).sum();
+            int totalGold = enemies.stream().mapToInt(h -> 75 * h.getLevel()).sum();
+            var survivors = currentProfile.getActiveParty().stream().filter(Hero::isAlive).toList();
+            if (!survivors.isEmpty()) {
+                int expPer = totalExp / survivors.size();
+                survivors.forEach(h -> h.gainExperience(expPer));
+            }
+            currentProfile.addGold(totalGold);
+            profileService.saveProfile(currentProfile);
+        } else if (!result.isDraw()) {
+            // lost
+            currentProfile.applyGoldPenalty();
+            profileService.saveProfile(currentProfile);
+        }
 
         return result;
     }
@@ -278,6 +445,34 @@ public class GameController {
     /** Returns the hall-of-fame (all profiles sorted by high score). */
     public List<Profile> getHallOfFame() {
         return profileService.getHallOfFame();
+    }
+
+    /** Logs out the current profile (clears active session). */
+    public void logout() {
+        this.currentProfile = null;
+    }
+
+    /**
+     * Exit (pause) the currently active campaign and persist the profile.
+     * Allowed only when a campaign is active and not during a battle.
+     */
+    public void exitCampaign() {
+        requireProfile();
+        if (!currentProfile.isCampaignActive()) {
+            throw new IllegalStateException("No active campaign to exit.");
+        }
+        currentProfile.pauseCampaign();
+        profileService.saveProfile(currentProfile);
+    }
+
+    /**
+     * Resume a previously-paused campaign (does not reset progress).
+     */
+    public void resumeCampaign() {
+        requireProfile();
+        currentProfile.resumeCampaign();
+        profileService.saveProfile(currentProfile);
+        System.out.println("Campaign resumed.");
     }
 
     // -------------------------------------------------------------------------

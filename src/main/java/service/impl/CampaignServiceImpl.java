@@ -68,6 +68,61 @@ public class CampaignServiceImpl implements CampaignService {
         itemValueSpent.put(profile.getPlayerName(), 0);
     }
 
+    /**
+     * Generates (but does not resolve) the next campaign room.
+     *
+     * This enables interactive UIs to run manual turn-by-turn combat before
+     * rewards/penalties are applied.
+     */
+    public CampaignEncounter createEncounter(Profile profile) {
+        if (isCampaignComplete(profile)) {
+            throw new IllegalStateException("Campaign is already complete.");
+        }
+
+        int roomNumber = profile.getCampaignRoom() + 1;
+        boolean isBattle = rollRoomType(profile);
+
+        if (isBattle) {
+            return new CampaignEncounter(CampaignResult.RoomType.BATTLE, roomNumber, generateEnemyParty(profile));
+        }
+        return new CampaignEncounter(CampaignResult.RoomType.INN, roomNumber, List.of());
+    }
+
+    /**
+     * Resolves a previously generated encounter and advances campaign progress.
+     *
+     * @param profile   active profile
+     * @param encounter generated encounter from {@link #createEncounter(Profile)}
+     * @param battleWon whether the player won the manual battle (ignored for INN)
+     */
+    public CampaignResult resolveEncounter(Profile profile, CampaignEncounter encounter, boolean battleWon) {
+        if (encounter == null) {
+            throw new IllegalArgumentException("Encounter cannot be null.");
+        }
+        if (isCampaignComplete(profile)) {
+            throw new IllegalStateException("Campaign is already complete.");
+        }
+
+        int expectedRoom = profile.getCampaignRoom() + 1;
+        if (encounter.getRoomNumber() != expectedRoom) {
+            throw new IllegalArgumentException("Encounter room does not match current campaign progress.");
+        }
+
+        CampaignResult result;
+        if (encounter.getRoomType() == CampaignResult.RoomType.BATTLE) {
+            result = resolveBattleOutcome(profile, expectedRoom, encounter.getEnemies(), battleWon);
+        } else {
+            result = runInnRoom(profile, expectedRoom);
+        }
+
+        profile.advanceCampaignRoom();
+        if (isCampaignComplete(profile)) {
+            int score = calculateFinalScore(profile);
+            profile.endCampaign(score);
+        }
+        return result;
+    }
+
     @Override
     public CampaignResult enterNextRoom(Profile profile) {
         if (isCampaignComplete(profile)) {
@@ -125,11 +180,15 @@ public class CampaignServiceImpl implements CampaignService {
 
     private CampaignResult runBattleRoom(Profile profile, int roomNumber) {
         List<Hero> enemies = generateEnemyParty(profile);
-        BattleResult battleResult = battleService.startBattle(profile.getActiveParty(), enemies);
+        battleService.startBattle(profile.getActiveParty(), enemies);
+        boolean playerWon = isPlayerPartyAlive(profile) && enemies.stream().noneMatch(Hero::isAlive);
+        return resolveBattleOutcome(profile, roomNumber, enemies, playerWon);
+    }
 
-        if (!battleResult.isDraw() && battleResult.getWinningTeam() == profile.getActiveParty()
-                || isPlayerPartyAlive(profile)) {
-            // Player won
+    private CampaignResult resolveBattleOutcome(Profile profile, int roomNumber,
+                                                List<Hero> enemies, boolean playerWon) {
+        boolean finalWin = playerWon && isPlayerPartyAlive(profile);
+        if (finalWin) {
             int totalExp  = 0;
             int totalGold = 0;
             for (Hero enemy : enemies) {
@@ -137,7 +196,6 @@ public class CampaignServiceImpl implements CampaignService {
                 totalGold += 75 * enemy.getLevel();
             }
 
-            // Distribute exp only to surviving heroes
             List<Hero> survivors = profile.getActiveParty().stream()
                     .filter(Hero::isAlive)
                     .collect(java.util.stream.Collectors.toList());
@@ -151,18 +209,13 @@ public class CampaignServiceImpl implements CampaignService {
 
             return new CampaignResult(CampaignResult.RoomType.BATTLE, roomNumber,
                     true, totalExp, totalGold, survivors);
-
-        } else {
-            // Player lost — apply penalties
-            profile.applyGoldPenalty();
-            applyExpPenalty(profile.getActiveParty());
-
-            // Revive the party at the last inn (represented by a free inn visit)
-            innService.visitInn(profile);
-
-            return new CampaignResult(CampaignResult.RoomType.BATTLE, roomNumber,
-                    false, 0, 0, List.of());
         }
+
+        profile.applyGoldPenalty();
+        applyExpPenalty(profile.getActiveParty());
+        innService.visitInn(profile);
+        return new CampaignResult(CampaignResult.RoomType.BATTLE, roomNumber,
+                false, 0, 0, List.of());
     }
 
     private CampaignResult runInnRoom(Profile profile, int roomNumber) {
@@ -181,7 +234,8 @@ public class CampaignServiceImpl implements CampaignService {
      * Enemies have no special abilities — they can only ATTACK, DEFEND, or WAIT.
      */
     private List<Hero> generateEnemyParty(Profile profile) {
-        int partySize    = 1 + random.nextInt(5);      // 1-5 enemies
+        // 1 enemy per room for demo purposes
+        int partySize    = 1;
         int cumLevel     = Math.max(1, profile.getCumulativePartyLevel());
         int minCumLevel  = Math.max(1, cumLevel - 10);
         int targetCumLvl = minCumLevel + random.nextInt(Math.max(1, cumLevel - minCumLevel + 1));
@@ -193,12 +247,34 @@ public class CampaignServiceImpl implements CampaignService {
 
         for (int i = 0; i < partySize; i++) {
             int level = Math.max(1, Math.min(10, levels[i]));
-            Hero enemy = new Hero("Enemy-" + (i + 1), HeroClass.WARRIOR);
+            // Choose enemy class with a bias away from heavy-defense Warriors so
+            // player damage numbers are more meaningful in early demos.
+            HeroClass enemyClass;
+            double r = random.nextDouble();
+            if (r < 0.45) enemyClass = HeroClass.CHAOS;
+            else if (r < 0.75) enemyClass = HeroClass.MAGE;
+            else if (r < 0.95) enemyClass = HeroClass.ORDER;
+            else enemyClass = HeroClass.WARRIOR;
+            // Name enemies as Goblins for the demo; adjust here if you prefer
+            Hero enemy = new Hero("Goblin-" + (i + 1), enemyClass);
             // Level up the enemy (base-class only, no specials)
             for (int lvl = 1; lvl < level; lvl++) {
-                enemy.levelUp(HeroClass.WARRIOR);
+                // Level up using the enemy's actual class so per-class bonuses apply correctly
+                enemy.levelUp(enemyClass);
             }
             enemies.add(enemy);
+        }
+        // For demo purposes, make level-1 goblins squishier so battles finish faster.
+        for (Hero enemy : enemies) {
+            if (enemy.getLevel() == 1) {
+                int desiredHp = 1;
+                int delta = desiredHp - enemy.getCurrentMaxHealth();
+                if (delta != 0) {
+                    enemy.addMaxHealth(delta);
+                }
+                // Ensure current HP matches the new max
+                enemy.revive();
+            }
         }
 
         return enemies;

@@ -33,6 +33,11 @@ public class DemoMain {
         Hero a1 = game.createHero("Astra", HeroClass.WARRIOR);
         game.createHero("Mira", HeroClass.ORDER);
         game.createHero("Zed", HeroClass.CHAOS);
+        // Debug: show created heroes' current attack and health
+        if (a1 != null) {
+            System.out.printf("Astra -> ATK: %d | HP: %d/%d | Class: %s%n",
+                a1.getCurrentAttack(), a1.getCurrentHealth(), a1.getCurrentMaxHealth(), a1.getHeroClass());
+        }
         alice.saveParty(new ArrayList<>(alice.getActiveParty()));
         game.save();
         System.out.printf("Created profile %s with %d heroes.%n", aliceName, alice.getActiveParty().size());

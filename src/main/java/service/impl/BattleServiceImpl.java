@@ -24,6 +24,7 @@ public class BattleServiceImpl implements BattleService {
         List<Hero> teamBCopy = new ArrayList<>(teamB);
         boolean isDraw = false;
         int turn = 0;
+        int consecutiveNoDamageRounds = 0;
 
         while (isTeamAlive(teamACopy) && isTeamAlive(teamBCopy)) {
             // Tick status effects at the start of each round
@@ -34,9 +35,26 @@ public class BattleServiceImpl implements BattleService {
             sortByInitiative(teamACopy);
             sortByInitiative(teamBCopy);
 
+            // Snapshot total HP to detect stalemates (no damage occurring)
+            int totalHpBefore = totalTeamHp(teamACopy) + totalTeamHp(teamBCopy);
+
             // Teams alternate — teamA hero acts, then teamB hero, etc.
             takeTurn(teamACopy, teamBCopy);
             takeTurn(teamBCopy, teamACopy);
+
+            int totalHpAfter = totalTeamHp(teamACopy) + totalTeamHp(teamBCopy);
+            if (totalHpAfter == totalHpBefore) {
+                consecutiveNoDamageRounds++;
+            } else {
+                consecutiveNoDamageRounds = 0;
+            }
+
+            // If no damage has occurred for a sustained number of rounds, treat
+            // it as a stalemate and declare a draw to avoid extremely long runs.
+            if (consecutiveNoDamageRounds >= 50) {
+                isDraw = true;
+                break;
+            }
 
             turn++;
             if (turn > 1000) {
@@ -191,6 +209,15 @@ public class BattleServiceImpl implements BattleService {
         for (Hero hero : team) {
             if (hero.isAlive()) hero.processStatusEffects();
         }
+    }
+
+    /** Returns the total current HP for a team (sums currentHealth of alive and down heroes). */
+    private int totalTeamHp(List<Hero> team) {
+        int sum = 0;
+        for (Hero h : team) {
+            if (h != null) sum += h.getCurrentHealth();
+        }
+        return sum;
     }
 
     // -------------------------------------------------------------------------
