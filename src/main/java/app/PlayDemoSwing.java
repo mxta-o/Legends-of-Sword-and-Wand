@@ -4,6 +4,7 @@ import controller.GameController;
 import model.Ability;
 import model.BattleResult;
 import model.CampaignEncounter;
+import service.impl.BattleEngine;
 import model.CampaignResult;
 import model.Hero;
 import model.HeroClass;
@@ -1115,9 +1116,7 @@ public class PlayDemoSwing {
 
             JPanel bottom = new JPanel(new FlowLayout(FlowLayout.LEFT));
             JButton buyBtn = makeActionButton("Buy", 14, 140, 36);
-            JButton trainBtn = makeActionButton("Train", 14, 140, 36);
             bottom.add(buyBtn);
-            bottom.add(trainBtn);
             panel.add(bottom, BorderLayout.SOUTH);
 
             JLabel goldLabel = new JLabel();
@@ -1148,8 +1147,6 @@ public class PlayDemoSwing {
                     JOptionPane.showMessageDialog(null, "Insufficient gold.", "Buy Failed", JOptionPane.WARNING_MESSAGE);
                 }
             });
-
-            trainBtn.addActionListener(e -> runUiAction(this::showTrainDialog));
 
             JOptionPane.showMessageDialog(null, panel, "Inn Shop", JOptionPane.PLAIN_MESSAGE);
         }
@@ -2169,7 +2166,21 @@ public class PlayDemoSwing {
     }
 
     private List<Hero> buildTurnOrder(List<Hero> party, List<Hero> enemies) {
-        return BattleEngine.buildTurnOrder(party, enemies);
+        List<Hero> order = new ArrayList<>();
+        for (Hero h : party) {
+            if (h.isAlive()) {
+                order.add(h);
+            }
+        }
+        for (Hero h : enemies) {
+            if (h.isAlive()) {
+                order.add(h);
+            }
+        }
+        order.sort(Comparator
+                .comparingInt(Hero::getLevel).reversed()
+                .thenComparingInt(Hero::getCurrentAttack).reversed());
+        return order;
     }
 
     private void runPlayerTurn(Hero hero, List<Hero> allies, List<Hero> enemies, Queue<Hero> waitQueue) {
@@ -2313,7 +2324,11 @@ public class PlayDemoSwing {
     }
 
     private Hero firstAliveExcept(List<Hero> list, Hero exclude) {
-        return BattleEngine.firstAliveExcept(list, exclude);
+        if (list == null) return null;
+        for (Hero h : list) {
+            if (h != null && h.isAlive() && h != exclude) return h;
+        }
+        return null;
     }
 
     private Ability chooseAbility(Hero hero, List<Ability> abilities) {
@@ -2389,19 +2404,34 @@ public class PlayDemoSwing {
     }
 
     private void tickStatuses(List<Hero> team) {
-        BattleEngine.tickStatuses(team);
+        for (Hero hero : team) {
+            if (hero.isAlive()) {
+                hero.processStatusEffects();
+            }
+        }
     }
 
     private boolean isTeamAlive(List<Hero> team) {
-        return BattleEngine.isTeamAlive(team);
+        return team.stream().anyMatch(Hero::isAlive);
     }
 
     private Hero firstAlive(List<Hero> team) {
-        return BattleEngine.firstAlive(team);
+        for (Hero hero : team) {
+            if (hero.isAlive()) {
+                return hero;
+            }
+        }
+        return null;
     }
 
     private List<Hero> aliveMembers(List<Hero> team) {
-        return BattleEngine.aliveMembers(team);
+        List<Hero> alive = new ArrayList<>();
+        for (Hero hero : team) {
+            if (hero.isAlive()) {
+                alive.add(hero);
+            }
+        }
+        return alive;
     }
 
     private String formatEnemyGroup(List<Hero> enemies) {
@@ -2762,9 +2792,9 @@ public class PlayDemoSwing {
                     });
                 } else {
                     // Match not finished; local player's move was persisted and control returns to opponent.
-                    // The worker thread already logs a more specific "Move saved..." message, avoid duplicating it here.
+                    // Show the minimal PvP-waiting action bar so player cannot enter rooms/inventory while waiting.
                     SwingUtilities.invokeLater(() -> {
-                        setActionBarIdle();
+                        setActionBarPvpWaiting(match);
                         showStatus();
                     });
                 }
@@ -3020,7 +3050,15 @@ public class PlayDemoSwing {
 
     /** Deep-copy a party so the UI can run a local simulation without mutating stored profiles. */
     private List<Hero> deepCopyParty(List<Hero> src) {
-        return BattleEngine.deepCopyParty(src);
+        List<Hero> out = new ArrayList<>();
+        for (Hero h : src) {
+            if (h == null) continue;
+            Hero copy = new Hero(h.getName(), h.getHeroClass());
+            // replicate level and basic stats by leveling up appropriately
+            for (int i = 1; i < h.getLevel(); i++) copy.levelUp(copy.getHeroClass());
+            out.add(copy);
+        }
+        return out;
     }
 
     /**

@@ -56,7 +56,8 @@ public class SQLiteProfileRepository implements ProfileRepository {
                         campaign_active INTEGER NOT NULL DEFAULT 0,
                         high_score     INTEGER NOT NULL DEFAULT 0,
                         password_hash  TEXT,
-                        password_salt  TEXT
+                        password_salt  TEXT,
+                        inventory      TEXT
                     )""");
 
             stmt.execute("""
@@ -73,6 +74,10 @@ public class SQLiteProfileRepository implements ProfileRepository {
                     base_defense   INTEGER NOT NULL DEFAULT 5,
                     is_alive       INTEGER NOT NULL DEFAULT 1,
                     party_index    INTEGER NOT NULL DEFAULT 0,
+                    -- new columns to support multi-class / hybrid
+                    class_levels   TEXT,
+                    specialization_class TEXT,
+                    hybrid_class   TEXT,
                     FOREIGN KEY (player_name) REFERENCES profiles(player_name) ON DELETE CASCADE
                 )""");
 
@@ -98,8 +103,26 @@ public class SQLiteProfileRepository implements ProfileRepository {
                     base_attack      INTEGER NOT NULL DEFAULT 5,
                     base_defense     INTEGER NOT NULL DEFAULT 5,
                     is_alive         INTEGER NOT NULL DEFAULT 1,
+                    class_levels     TEXT,
+                    specialization_class TEXT,
+                    hybrid_class     TEXT,
                     FOREIGN KEY (saved_party_id) REFERENCES saved_parties(id) ON DELETE CASCADE
                 )""");
+
+            // For existing databases, attempt to add new columns if they don't exist
+            try {
+                stmt.execute("ALTER TABLE heroes ADD COLUMN class_levels TEXT");
+                stmt.execute("ALTER TABLE heroes ADD COLUMN specialization_class TEXT");
+                stmt.execute("ALTER TABLE heroes ADD COLUMN hybrid_class TEXT");
+            } catch (SQLException ignored) {}
+            try {
+                stmt.execute("ALTER TABLE saved_party_heroes ADD COLUMN class_levels TEXT");
+                stmt.execute("ALTER TABLE saved_party_heroes ADD COLUMN specialization_class TEXT");
+                stmt.execute("ALTER TABLE saved_party_heroes ADD COLUMN hybrid_class TEXT");
+            } catch (SQLException ignored) {}
+            try {
+                stmt.execute("ALTER TABLE profiles ADD COLUMN inventory TEXT");
+            } catch (SQLException ignored) {}
 
         } catch (SQLException e) {
             throw new RuntimeException("Failed to initialise SQLite schema", e);
@@ -118,8 +141,8 @@ public class SQLiteProfileRepository implements ProfileRepository {
         }
             String sql = """
                 INSERT INTO profiles (player_name, gold, pvp_wins, pvp_losses,
-                                      campaign_room, campaign_active, high_score, password_hash, password_salt)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""";
+                                      campaign_room, campaign_active, high_score, password_hash, password_salt, inventory)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""";
 
         try (Connection conn = connect();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -136,7 +159,7 @@ public class SQLiteProfileRepository implements ProfileRepository {
     public void update(Profile profile) {
         String sql = """
                 UPDATE profiles SET gold=?, pvp_wins=?, pvp_losses=?,
-                    campaign_room=?, campaign_active=?, high_score=?, password_hash=?, password_salt=?
+                    campaign_room=?, campaign_active=?, high_score=?, password_hash=?, password_salt=?, inventory=?
                 WHERE player_name=?""";
 
         try (Connection conn = connect();
@@ -149,7 +172,8 @@ public class SQLiteProfileRepository implements ProfileRepository {
             ps.setInt(6,    profile.getHighScore());
             ps.setString(7, profile.getPasswordHash());
             ps.setString(8, profile.getPasswordSalt());
-            ps.setString(9, profile.getPlayerName());
+            ps.setString(9, serializeInventory(profile));
+            ps.setString(10, profile.getPlayerName());
             ps.executeUpdate();
 
             // Refresh hero rows
@@ -259,6 +283,7 @@ public class SQLiteProfileRepository implements ProfileRepository {
             // use getters for password hash and salt
             ps.setString(8, profile.getPasswordHash());
             ps.setString(9, profile.getPasswordSalt());
+            ps.setString(10, serializeInventory(profile));
     }
 
     private Profile mapRowToProfile(ResultSet rs) throws SQLException {
@@ -280,6 +305,12 @@ public class SQLiteProfileRepository implements ProfileRepository {
                     p.setPasswordHashAndSalt(ph, psalt);
                 }
             } catch (Exception ignored) {}
+            // restore inventory if present
+            try {
+                String inv = rs.getString("inventory");
+                java.util.Map<model.InnItem,Integer> map = parseInventory(inv);
+                if (map != null && !map.isEmpty()) p.setInventoryMap(map);
+            } catch (Exception ignored) {}
         return p;
     }
 
@@ -287,8 +318,8 @@ public class SQLiteProfileRepository implements ProfileRepository {
         String sql = """
             INSERT INTO heroes (player_name, hero_name, hero_class, level, experience,
                                 current_health, current_mana, base_attack, base_defense,
-                                is_alive, party_index)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""";
+                                is_alive, party_index, class_levels, specialization_class, hybrid_class)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""";
 
         List<Hero> party = profile.getActiveParty();
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -305,6 +336,11 @@ public class SQLiteProfileRepository implements ProfileRepository {
                 ps.setInt(9,    h.getCurrentDefense());
                 ps.setInt(10,   h.isAlive() ? 1 : 0);
                 ps.setInt(11,   i);
+                ps.setString(12, serializeClassLevels(h));
+                HeroClass spec = h.getSpecializationClass();
+                ps.setString(13, spec == null ? null : spec.name());
+                HeroClass hybrid = h.getHybridClass();
+                ps.setString(14, hybrid == null ? null : hybrid.name());
                 ps.addBatch();
             }
             ps.executeBatch();
@@ -313,7 +349,7 @@ public class SQLiteProfileRepository implements ProfileRepository {
 
     private void saveSavedParties(Connection conn, Profile profile) throws SQLException {
         String insertParty = "INSERT INTO saved_parties (player_name, slot_index) VALUES (?, ?)";
-        String insertHero = "INSERT INTO saved_party_heroes (saved_party_id, hero_index, hero_name, hero_class, level, experience, current_health, current_mana, base_attack, base_defense, is_alive) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        String insertHero = "INSERT INTO saved_party_heroes (saved_party_id, hero_index, hero_name, hero_class, level, experience, current_health, current_mana, base_attack, base_defense, is_alive, class_levels, specialization_class, hybrid_class) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
         List<List<Hero>> parties = profile.getSavedParties();
         if (parties == null || parties.isEmpty()) return;
@@ -341,6 +377,11 @@ public class SQLiteProfileRepository implements ProfileRepository {
                         psHero.setInt(9, h.getCurrentAttack());
                         psHero.setInt(10, h.getCurrentDefense());
                         psHero.setInt(11, h.isAlive() ? 1 : 0);
+                        psHero.setString(12, serializeClassLevels(h));
+                        HeroClass spec = h.getSpecializationClass();
+                        psHero.setString(13, spec == null ? null : spec.name());
+                        HeroClass hybrid = h.getHybridClass();
+                        psHero.setString(14, hybrid == null ? null : hybrid.name());
                         psHero.addBatch();
                     }
                     psHero.executeBatch();
@@ -368,8 +409,25 @@ public class SQLiteProfileRepository implements ProfileRepository {
                         while (hrs.next()) {
                             HeroClass heroClass = HeroClass.valueOf(hrs.getString("hero_class"));
                             Hero hero = new Hero(hrs.getString("hero_name"), heroClass);
-                            int level = hrs.getInt("level");
-                            for (int lvl = 1; lvl < level; lvl++) hero.levelUp(heroClass);
+                            // Restore class levels if available (supports multi-class / hybrid)
+                            try {
+                                String clsLevels = hrs.getString("class_levels");
+                                java.util.Map<HeroClass,Integer> map = parseClassLevels(clsLevels);
+                                if (!map.isEmpty()) {
+                                    applyClassLevelsToHero(hero, map);
+                                } else {
+                                    int level = hrs.getInt("level");
+                                    for (int lvl = 1; lvl < level; lvl++) hero.levelUp(heroClass);
+                                }
+                            } catch (SQLException ignored) {
+                                int level = hrs.getInt("level");
+                                for (int lvl = 1; lvl < level; lvl++) hero.levelUp(heroClass);
+                            }
+                            // Restore hybrid field if present
+                            try {
+                                String hybrid = hrs.getString("hybrid_class");
+                                if (hybrid != null && !hybrid.isBlank()) hero.setHybridClass(HeroClass.valueOf(hybrid));
+                            } catch (SQLException ignored) {}
                             // Restore experience progress if present
                             try {
                                 int exp = hrs.getInt("experience");
@@ -406,6 +464,54 @@ public class SQLiteProfileRepository implements ProfileRepository {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Class levels serialization helpers
+    // -------------------------------------------------------------------------
+
+    private static String serializeClassLevels(Hero h) {
+        if (h == null) return null;
+        StringBuilder sb = new StringBuilder();
+        for (HeroClass c : HeroClass.values()) {
+            int lvl = h.getClassLevel(c);
+            if (lvl > 0) {
+                if (sb.length() > 0) sb.append(',');
+                sb.append(c.name()).append('=').append(lvl);
+            }
+        }
+        return sb.length() == 0 ? null : sb.toString();
+    }
+
+    private static java.util.Map<HeroClass,Integer> parseClassLevels(String s) {
+        java.util.Map<HeroClass,Integer> out = new java.util.HashMap<>();
+        if (s == null || s.isBlank()) return out;
+        String[] parts = s.split(",");
+        for (String p : parts) {
+            String[] kv = p.split("=");
+            if (kv.length != 2) continue;
+            try {
+                HeroClass c = HeroClass.valueOf(kv[0]);
+                int lvl = Integer.parseInt(kv[1]);
+                out.put(c, lvl);
+            } catch (Exception ignored) {}
+        }
+        return out;
+    }
+
+    private static void applyClassLevelsToHero(Hero hero, java.util.Map<HeroClass,Integer> levels) {
+        if (levels == null || levels.isEmpty()) return;
+        // Ensure the hero initially has its constructor class at level 1.
+        // For each class, call levelUp the required number of times.
+        for (java.util.Map.Entry<HeroClass,Integer> e : levels.entrySet()) {
+            HeroClass cls = e.getKey();
+            int target = Math.max(0, e.getValue());
+            int existing = hero.getClassLevel(cls);
+            // levelUp required times
+            for (int i = existing; i < target; i++) {
+                hero.levelUp(cls);
+            }
+        }
+    }
+
     private void loadHeroes(Connection conn, Profile profile) throws SQLException {
         String sql = """
             SELECT * FROM heroes WHERE player_name=? ORDER BY party_index""";
@@ -415,12 +521,25 @@ public class SQLiteProfileRepository implements ProfileRepository {
                 while (rs.next()) {
                     HeroClass heroClass = HeroClass.valueOf(rs.getString("hero_class"));
                     Hero hero = new Hero(rs.getString("hero_name"), heroClass);
-                    // Re-apply levels (we store the final level; re-levelling
-                    // reconstructs base stats faithfully)
-                    int level = rs.getInt("level");
-                    for (int lvl = 1; lvl < level; lvl++) {
-                        hero.levelUp(heroClass);
+                    // Re-apply levels (support multi-class / hybrid if stored)
+                    try {
+                        String clsLevels = rs.getString("class_levels");
+                        java.util.Map<HeroClass,Integer> map = parseClassLevels(clsLevels);
+                        if (!map.isEmpty()) {
+                            applyClassLevelsToHero(hero, map);
+                        } else {
+                            int level = rs.getInt("level");
+                            for (int lvl = 1; lvl < level; lvl++) hero.levelUp(heroClass);
+                        }
+                    } catch (SQLException ignored) {
+                        int level = rs.getInt("level");
+                        for (int lvl = 1; lvl < level; lvl++) hero.levelUp(heroClass);
                     }
+                    // Restore hybrid field if present
+                    try {
+                        String hybrid = rs.getString("hybrid_class");
+                        if (hybrid != null && !hybrid.isBlank()) hero.setHybridClass(HeroClass.valueOf(hybrid));
+                    } catch (SQLException ignored) {}
                     if (rs.getInt("is_alive") == 0 && hero.isAlive()) {
                         hero.takeDamage(hero.getCurrentMaxHealth());
                     }
@@ -428,5 +547,38 @@ public class SQLiteProfileRepository implements ProfileRepository {
                 }
             }
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Inventory serialization helpers
+    // -------------------------------------------------------------------------
+
+    private static String serializeInventory(Profile profile) {
+        if (profile == null) return null;
+        java.util.Map<model.InnItem,Integer> map = profile.getInventoryMap();
+        if (map == null || map.isEmpty()) return null;
+        StringBuilder sb = new StringBuilder();
+        for (java.util.Map.Entry<model.InnItem,Integer> e : map.entrySet()) {
+            if (e.getValue() == null || e.getValue() <= 0) continue;
+            if (sb.length() > 0) sb.append(',');
+            sb.append(e.getKey().name()).append('=').append(e.getValue());
+        }
+        return sb.length() == 0 ? null : sb.toString();
+    }
+
+    private static java.util.Map<model.InnItem,Integer> parseInventory(String s) {
+        java.util.Map<model.InnItem,Integer> out = new java.util.HashMap<>();
+        if (s == null || s.isBlank()) return out;
+        String[] parts = s.split(",");
+        for (String p : parts) {
+            String[] kv = p.split("=");
+            if (kv.length != 2) continue;
+            try {
+                model.InnItem item = model.InnItem.valueOf(kv[0]);
+                int cnt = Integer.parseInt(kv[1]);
+                if (cnt > 0) out.put(item, cnt);
+            } catch (Exception ignored) {}
+        }
+        return out;
     }
 }

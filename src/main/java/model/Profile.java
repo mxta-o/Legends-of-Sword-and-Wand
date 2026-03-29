@@ -69,6 +69,20 @@ public class Profile {
     }
 
     /**
+     * Returns a modifiable view of the inventory mapping (item -> count).
+     * Intended for persistence code to read the full inventory.
+     */
+    public Map<InnItem, Integer> getInventoryMap() { return inventory; }
+
+    /**
+     * Replace the inventory contents. Used when restoring from persistence.
+     */
+    public void setInventoryMap(Map<InnItem, Integer> map) {
+        this.inventory.clear();
+        if (map != null) this.inventory.putAll(map);
+    }
+
+    /**
      * Sets the account password using PBKDF2WithHmacSHA256 with a random salt.
      * Pass null/empty to clear the password.
      */
@@ -196,7 +210,11 @@ public class Profile {
 
     public List<Hero> getSavedParty(int index) {
         if (index < 0 || index >= savedParties.size()) return null;
-        return savedParties.get(index);
+        try {
+            return savedParties.get(index);
+        } catch (IndexOutOfBoundsException ex) {
+            return null;
+        }
     }
 
     // -------------------------------------------------------------------------

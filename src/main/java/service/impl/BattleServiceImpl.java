@@ -20,59 +20,7 @@ public class BattleServiceImpl implements BattleService {
 
     @Override
     public BattleResult startBattle(List<Hero> teamA, List<Hero> teamB) {
-        List<Hero> teamACopy = new ArrayList<>(teamA);
-        List<Hero> teamBCopy = new ArrayList<>(teamB);
-        boolean isDraw = false;
-        int turn = 0;
-        int consecutiveNoDamageRounds = 0;
-
-        while (isTeamAlive(teamACopy) && isTeamAlive(teamBCopy)) {
-            // Tick status effects at the start of each round
-            tickStatusEffects(teamACopy);
-            tickStatusEffects(teamBCopy);
-
-            // Sort each team: highest level first; ties broken by highest attack
-            sortByInitiative(teamACopy);
-            sortByInitiative(teamBCopy);
-
-            // Snapshot total HP to detect stalemates (no damage occurring)
-            int totalHpBefore = totalTeamHp(teamACopy) + totalTeamHp(teamBCopy);
-
-            // Teams alternate — teamA hero acts, then teamB hero, etc.
-            takeTurn(teamACopy, teamBCopy);
-            takeTurn(teamBCopy, teamACopy);
-
-            int totalHpAfter = totalTeamHp(teamACopy) + totalTeamHp(teamBCopy);
-            if (totalHpAfter == totalHpBefore) {
-                consecutiveNoDamageRounds++;
-            } else {
-                consecutiveNoDamageRounds = 0;
-            }
-
-            // If no damage has occurred for a sustained number of rounds, treat
-            // it as a stalemate and declare a draw to avoid extremely long runs.
-            if (consecutiveNoDamageRounds >= 50) {
-                isDraw = true;
-                break;
-            }
-
-            turn++;
-            if (turn > 1000) {
-                isDraw = true;
-                break;
-            }
-        }
-
-        List<Hero> winningTeam = isTeamAlive(teamACopy)
-                ? teamACopy
-                : (isTeamAlive(teamBCopy) ? teamBCopy : new ArrayList<>());
-        List<Hero> losingTeam = isTeamAlive(teamACopy) ? teamBCopy : teamACopy;
-
-        if (isDraw) {
-            winningTeam = new ArrayList<>();
-            losingTeam  = new ArrayList<>();
-        }
-        return new BattleResult(winningTeam, losingTeam, isDraw);
+        return BattleEngine.runBattle(teamA, teamB);
     }
 
     // -------------------------------------------------------------------------
