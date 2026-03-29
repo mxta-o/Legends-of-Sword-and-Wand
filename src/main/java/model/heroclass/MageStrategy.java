@@ -23,7 +23,7 @@ public class MageStrategy implements HeroClassStrategy {
     }
 
     @Override
-    public List<Ability> getAbilities() {
+    public List<Ability> getAbilities(Hero hero) {
         return Arrays.asList(new Replenish());
     }
 

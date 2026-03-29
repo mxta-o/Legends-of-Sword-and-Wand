@@ -3,6 +3,7 @@ package model.heroclass;
 import model.Ability;
 import model.Hero;
 import model.HeroClassStrategy;
+import model.HeroClass;
 import model.ability.BerserkerAttack;
 
 import java.util.Arrays;
@@ -23,8 +24,22 @@ public class WarriorStrategy implements HeroClassStrategy {
     }
 
     @Override
-    public List<Ability> getAbilities() {
-        return Arrays.asList(new BerserkerAttack());
+    public List<Ability> getAbilities(Hero hero) {
+        // Default flags
+        boolean stunSplash = false;
+        boolean healBefore = false;
+
+        // If hero has specialized as Warrior (reached level 5) and is not hybrid,
+        // treat as Knight: Berserker gains 50% stun on splash targets.
+        if (hero.getSpecializationClass() == HeroClass.WARRIOR && hero.getHybridClass() == null && hero.getClassLevel(HeroClass.WARRIOR) >= 5) {
+            stunSplash = true;
+        }
+        // Paladin: Order+Warrior hybrid heals before attack
+        if (hero.getHybridClass() == HeroClass.ORDER && hero.getClassLevel(HeroClass.WARRIOR) >= 5) {
+            healBefore = true;
+        }
+
+        return Arrays.asList(new BerserkerAttack(stunSplash, healBefore));
     }
 
     @Override

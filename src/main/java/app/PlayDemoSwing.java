@@ -27,10 +27,13 @@ import javax.swing.JScrollPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
+import javax.swing.JSpinner;
+import javax.swing.SpinnerNumberModel;
 import javax.swing.JPasswordField;
 import javax.swing.SwingUtilities;
 import javax.swing.WindowConstants;
 import javax.swing.BoxLayout;
+import javax.swing.Box;
 import javax.swing.ImageIcon;
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
@@ -64,6 +67,37 @@ public class PlayDemoSwing {
 
     private final GameController game = new GameController();
     private final Random random = new Random();
+
+    // UI observer that appends hero events to the adventure log.
+    private final model.HeroObserver uiObserver = new model.HeroObserver() {
+        @Override
+        public void onHeroDied(model.Hero hero) {
+            SwingUtilities.invokeLater(() -> appendLog(hero.getName() + " has fallen!"));
+        }
+
+        @Override
+        public void onHeroRevived(model.Hero hero) {
+            SwingUtilities.invokeLater(() -> appendLog(String.format("%s has been revived! (HP: %d, Mana: %d)",
+                    hero.getName(), hero.getCurrentHealth(), hero.getCurrentMana())));
+        }
+
+        @Override
+        public void onLevelUp(model.Hero hero, int newLevel) {
+            SwingUtilities.invokeLater(() -> {
+                appendLog(hero.getName() + " reached level " + newLevel + "!");
+                // After a level-up, check for possible hybridization opportunities.
+                try {
+                    Profile p = game.getCurrentProfile();
+                    if (p != null) SwingUtilities.invokeLater(() -> offerHybridizationForProfile(p));
+                } catch (Exception ignored) {}
+            });
+        }
+
+        @Override
+        public void onHeroHealed(model.Hero hero, int amountHealed) {
+            SwingUtilities.invokeLater(() -> appendLog(hero.getName() + " recovered " + amountHealed + " HP (now " + hero.getCurrentHealth() + "/" + hero.getCurrentMaxHealth() + ")"));
+        }
+    };
 
     private JTextArea logArea;
     private JTextField profileNameField;
@@ -173,6 +207,7 @@ public class PlayDemoSwing {
         JButton createProfileBtn = makeActionButton("Create Profile", 14, 140, 36);
         JButton loadProfileBtn = makeActionButton("Load Profile", 14, 140, 36);
         JButton statusBtn = makeActionButton("Show Status", 14, 140, 36);
+        JButton trainBtn = makeActionButton("Train Class", 14, 140, 36);
         JButton deleteProfileBtn = makeActionButton("Delete Profile", 14, 140, 36);
 
         row1.add(new JLabel("Profile:"));
@@ -180,6 +215,7 @@ public class PlayDemoSwing {
         row1.add(createProfileBtn);
         row1.add(loadProfileBtn);
         row1.add(statusBtn);
+        row1.add(trainBtn);
         row1.add(deleteProfileBtn);
 
         JPanel row2 = new JPanel(new BorderLayout(8, 8));
@@ -223,6 +259,7 @@ public class PlayDemoSwing {
 
         createProfileBtn.addActionListener(e -> runUiAction(this::showAuthDialog));
         loadProfileBtn.addActionListener(e -> runUiAction(this::showAuthDialog));
+        trainBtn.addActionListener(e -> runUiAction(this::showTrainDialog));
         createHeroBtn.addActionListener(e -> runUiAction(this::createHero));
         savePartyBtn.addActionListener(e -> runUiAction(this::savePartySlot));
         statusBtn.addActionListener(e -> runUiAction(this::showStatus));
@@ -277,7 +314,7 @@ public class PlayDemoSwing {
         row2.add(recruitCombo);
         row2.add(recruitBtn);
 
-        startCampaignBtn.addActionListener(e -> runUiAction(this::startCampaign));
+        startCampaignBtn.addActionListener(e -> runUiAction(() -> SwingUtilities.invokeLater(this::setActionBarPostSignup)));
         nextRoomBtn.addActionListener(e -> runUiAction(this::enterNextRoom));
         visitInnBtn.addActionListener(e -> runUiAction(this::visitInn));
         // buyItemBtn removed; purchases must be done in the Inn Shop.
@@ -569,6 +606,12 @@ public class PlayDemoSwing {
                                 case "Berserker Attack": sb.append("Primary full damage, plus splash damage to 2 other targets."); break;
                                 default: sb.append("Special ability.");
                             }
+
+                            // If the ability exposes special flags, show them (e.g., Berserker upgrades)
+                            if (sel instanceof model.ability.BerserkerAttack ba) {
+                                if (ba.hasHealBeforeAttack()) sb.append("\nSpecial: Heals caster for 10% max HP before attacking.");
+                                if (ba.hasStunSplash()) sb.append("\nSpecial: 50% chance to STUN each splash target.");
+                            }
                             abilityDesc.setText(sb.toString());
 
                             // Populate targets based on support vs enemy ability
@@ -654,16 +697,17 @@ public class PlayDemoSwing {
         JPanel center = new JPanel();
         center.setLayout(new java.awt.GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new java.awt.Insets(8, 40, 8, 40);
+        // Reduced horizontal insets to tighten spacing between main action buttons
+        gbc.insets = new java.awt.Insets(8, 12, 8, 12);
 
-        JButton pvpBig = makeActionButton("PvP/Records", 28, 280, 80);
+        JButton pvpBig = makeActionButton("PvP/Records", 24, 200, 64);
         pvpBig.addActionListener(e -> SwingUtilities.invokeLater(this::showPvpDialog));
 
         Profile cur = game.getCurrentProfile();
         // If the current profile has saved campaign progress (paused/previous run),
         // offer a Resume Campaign button instead of starting a new run.
             if (cur != null && cur.getCampaignRoom() > 0) {
-            JButton resumeBig = makeActionButton("Resume Campaign", 28, 280, 80);
+            JButton resumeBig = makeActionButton("Resume Campaign", 20, 240, 80);
             resumeBig.addActionListener(e -> runUiAction(() -> {
                 try {
                     if (hasActivePvpMatches()) {
@@ -681,13 +725,39 @@ public class PlayDemoSwing {
                 }
             }));
 
+            JButton startNewBig = makeActionButton("Start New Campaign", 20, 240, 80);
+            startNewBig.addActionListener(e -> runUiAction(() -> {
+                try {
+                    if (hasActivePvpMatches()) {
+                        JOptionPane.showMessageDialog(null,
+                            "You have an active PvP duel. Finish it before starting a new campaign.",
+                            "Active Duel",
+                            JOptionPane.WARNING_MESSAGE);
+                        return;
+                    }
+                    int confirm = JOptionPane.showConfirmDialog(null,
+                        "Starting a new campaign will overwrite your existing progress. Continue?",
+                        "Start New Campaign",
+                        JOptionPane.YES_NO_OPTION,
+                        JOptionPane.WARNING_MESSAGE);
+                    if (confirm != JOptionPane.YES_OPTION) return;
+                    game.startCampaign();
+                    appendLog("Started new campaign.");
+                    SwingUtilities.invokeLater(this::setActionBarCampaign);
+                } catch (Exception ex) {
+                    JOptionPane.showMessageDialog(null, ex.getMessage(), "Start Failed", JOptionPane.WARNING_MESSAGE);
+                }
+            }));
+
             gbc.gridx = 0; gbc.gridy = 0;
             center.add(resumeBig, gbc);
             gbc.gridx = 1; gbc.gridy = 0;
+            center.add(startNewBig, gbc);
+            gbc.gridx = 2; gbc.gridy = 0;
             center.add(pvpBig, gbc);
         } else {
-            JButton startCampaignBig = makeActionButton("Start Campaign", 28, 280, 80);
-            startCampaignBig.addActionListener(e -> runUiAction(this::startCampaign));
+            JButton startCampaignBig = makeActionButton("Start Campaign", 24, 200, 64);
+            startCampaignBig.addActionListener(e -> runUiAction(this::postsignup));
 
             gbc.gridx = 0; gbc.gridy = 0;
             center.add(startCampaignBig, gbc);
@@ -714,22 +784,26 @@ public class PlayDemoSwing {
         JPanel right = new JPanel();
         right.setLayout(new BoxLayout(right, BoxLayout.Y_AXIS));
 
-        JPanel topRow = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        // Show login button when no profile is active (helps when user dismissed auth)
-        if (game.getCurrentProfile() == null) {
-            JButton loginBtn = makeActionButton("Log In", 12, 100, 28);
-            loginBtn.addActionListener(e -> runUiAction(this::showAuthDialog));
-            topRow.add(loginBtn);
-        }
+        // Build a single right-side column: mailbox (optional), Choose Party, Log Out, Delete Profile
         if (mailboxLabel == null) mailboxLabel = new JLabel("");
-        topRow.add(mailboxLabel);
-        JButton choosePartyBtn = makeActionButton("Choose Party", 12, 120, 28);
-        choosePartyBtn.addActionListener(e -> SwingUtilities.invokeLater(this::showPartySelectionDialog));
-        topRow.add(choosePartyBtn);
-        topRow.add(logout);
+        mailboxLabel.setAlignmentX(java.awt.Component.CENTER_ALIGNMENT);
+        right.add(mailboxLabel);
 
-        JPanel bottomRow = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JButton choosePartyBtn = makeActionButton("Choose Party", 14, 120, 36);
+        choosePartyBtn.setMaximumSize(new java.awt.Dimension(120, 36));
+        choosePartyBtn.setAlignmentX(java.awt.Component.CENTER_ALIGNMENT);
+        choosePartyBtn.addActionListener(e -> SwingUtilities.invokeLater(this::showPartySelectionDialog));
+        right.add(Box.createVerticalStrut(8));
+        right.add(choosePartyBtn);
+
+        logout.setMaximumSize(new java.awt.Dimension(120, 36));
+        logout.setAlignmentX(java.awt.Component.CENTER_ALIGNMENT);
+        right.add(Box.createVerticalStrut(8));
+        right.add(logout);
+
         JButton deleteProfileBtn = makeActionButton("Delete Profile", 14, 120, 36);
+        deleteProfileBtn.setMaximumSize(new java.awt.Dimension(120, 36));
+        deleteProfileBtn.setAlignmentX(java.awt.Component.CENTER_ALIGNMENT);
         deleteProfileBtn.addActionListener(e -> runUiAction(() -> {
             Profile current = game.getCurrentProfile();
             if (current == null) throw new IllegalArgumentException("No profile loaded.");
@@ -745,10 +819,8 @@ public class PlayDemoSwing {
             setActionBarIdle();
             SwingUtilities.invokeLater(this::showAuthDialog);
         }));
-        bottomRow.add(deleteProfileBtn);
-
-        right.add(topRow);
-        right.add(bottomRow);
+        right.add(Box.createVerticalStrut(8));
+        right.add(deleteProfileBtn);
         actionBarPanel.add(right, BorderLayout.EAST);
 
         actionBarPanel.revalidate();
@@ -1043,7 +1115,9 @@ public class PlayDemoSwing {
 
             JPanel bottom = new JPanel(new FlowLayout(FlowLayout.LEFT));
             JButton buyBtn = makeActionButton("Buy", 14, 140, 36);
+            JButton trainBtn = makeActionButton("Train", 14, 140, 36);
             bottom.add(buyBtn);
+            bottom.add(trainBtn);
             panel.add(bottom, BorderLayout.SOUTH);
 
             JLabel goldLabel = new JLabel();
@@ -1066,10 +1140,16 @@ public class PlayDemoSwing {
                 if (ok) {
                     appendLog("Purchased " + sel.getDisplayName() + " (added to inventory).");
                     updateGold.run();
+                    // Refresh shared item list to show updated inventory counts
+                    if (sharedItemList != null) {
+                        sharedItemList.repaint();
+                    }
                 } else {
                     JOptionPane.showMessageDialog(null, "Insufficient gold.", "Buy Failed", JOptionPane.WARNING_MESSAGE);
                 }
             });
+
+            trainBtn.addActionListener(e -> runUiAction(this::showTrainDialog));
 
             JOptionPane.showMessageDialog(null, panel, "Inn Shop", JOptionPane.PLAIN_MESSAGE);
         }
@@ -1129,6 +1209,97 @@ public class PlayDemoSwing {
         panel.add(bottom, BorderLayout.SOUTH);
 
         JOptionPane.showMessageDialog(null, panel, "Inn Recruitment", JOptionPane.PLAIN_MESSAGE);
+    }
+
+    /** Train a hero in another class (increment chosen class levels). */
+    private void showTrainDialog() {
+        ensureProfileSelected();
+        Profile profile = game.getCurrentProfile();
+
+        JPanel panel = new JPanel(new GridLayout(3, 2, 6, 6));
+        JComboBox<Hero> heroBox = new JComboBox<>();
+        for (Hero h : profile.getActiveParty()) heroBox.addItem(h);
+        JComboBox<HeroClass> classBox = new JComboBox<>();
+        JSpinner levels = new JSpinner(new SpinnerNumberModel(1, 1, 10, 1));
+
+        // Render hero names instead of default toString()
+        heroBox.setRenderer(new DefaultListCellRenderer() {
+            @Override
+            public java.awt.Component getListCellRendererComponent(javax.swing.JList<?> list, Object value, int index, boolean isSelected, boolean cellHasFocus) {
+                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                if (value instanceof Hero) {
+                    setText(((Hero) value).getName());
+                }
+                return this;
+            }
+        });
+
+        // Helper to populate classBox with classes the hero currently has (>0 levels)
+        Runnable populateClassesForSelectedHero = () -> {
+            classBox.removeAllItems();
+            Hero sel = (Hero) heroBox.getSelectedItem();
+            if (sel != null) {
+                for (HeroClass hc : HeroClass.values()) {
+                    if (sel.getClassLevel(hc) > 0) classBox.addItem(hc);
+                }
+            }
+            // Fallback: if none found, allow all classes
+            if (classBox.getItemCount() == 0) {
+                for (HeroClass hc : HeroClass.values()) classBox.addItem(hc);
+            }
+        };
+        heroBox.addActionListener(e -> populateClassesForSelectedHero.run());
+        // Populate initially
+        if (heroBox.getItemCount() > 0) populateClassesForSelectedHero.run();
+
+        // Cost display: 500g per level
+        JLabel costLabel = new JLabel("Cost: " + ((Integer) levels.getValue() * 500) + "g");
+        levels.addChangeListener(e -> costLabel.setText("Cost: " + ((Integer) levels.getValue() * 500) + "g"));
+
+        panel.add(new JLabel("Hero:"));
+        panel.add(heroBox);
+        panel.add(new JLabel("Class to train:"));
+        panel.add(classBox);
+        panel.add(new JLabel("Levels to train:"));
+        panel.add(levels);
+        // show cost under levels
+        panel.add(new JLabel(""));
+        panel.add(costLabel);
+
+        int res = JOptionPane.showConfirmDialog(null, panel, "Train Hero Class", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (res != JOptionPane.OK_OPTION) return;
+
+        Hero selected = (Hero) heroBox.getSelectedItem();
+        HeroClass chosen = (HeroClass) classBox.getSelectedItem();
+        int n = (Integer) levels.getValue();
+        if (selected == null || chosen == null) return;
+
+        int totalCost = n * 500;
+        if (profile.getGold() < totalCost) {
+            JOptionPane.showMessageDialog(null, "Insufficient gold to train (need " + totalCost + "g).", "Train Failed", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        // Ensure UI observer is attached so level-ups are logged
+        registerUiObserversForProfile(profile);
+
+        // Charge once, then apply levels
+        try {
+            profile.spendGold(totalCost);
+        } catch (IllegalArgumentException ex) {
+            JOptionPane.showMessageDialog(null, ex.getMessage(), "Train Failed", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        for (int i = 0; i < n; i++) {
+            selected.levelUp(chosen);
+            appendLog(selected.getName() + " trained: +1 " + chosen.name() + " -> class level " + selected.getClassLevel(chosen));
+        }
+
+        appendLog("Spent " + totalCost + "g to train " + selected.getName() + ".");
+
+        try { game.save(); } catch (Exception ignored) {}
+        showStatus();
     }
 
     /** Build or return a shared item list + preview panel for shop/inventory UIs. */
@@ -1202,6 +1373,9 @@ public class PlayDemoSwing {
         String pw = JOptionPane.showInputDialog(null, "Set a password (leave blank for no password):", "Set Password", JOptionPane.QUESTION_MESSAGE);
         Profile profile = game.createProfile(name, pw == null ? "" : pw);
         appendLog("Created profile: " + profile.getPlayerName());
+        // Attach UI observers for any heroes (none yet for a new profile),
+        // but keep this call for consistency so future saves/load flows work.
+        registerUiObserversForProfile(profile);
         refreshPartySelectors();
         showStatus();
         // Helpful class guide for new players
@@ -1213,6 +1387,14 @@ public class PlayDemoSwing {
         appendLog("Tip: ORDER = healer/support, CHAOS = durable damage, WARRIOR = physical DPS, MAGE = spellcaster.");
         // Post-creation flows for a brand-new profile (action bar + first-hero recruit)
         handleNewProfile(profile);
+    }
+
+    /** Register the UI observer for all heroes in the given profile's active party. */
+    private void registerUiObserversForProfile(Profile profile) {
+        if (profile == null) return;
+        for (Hero h : profile.getActiveParty()) {
+            if (h != null) h.addObserver(uiObserver);
+        }
     }
 
     private void loadProfile() {
@@ -1228,6 +1410,9 @@ public class PlayDemoSwing {
         }
 
         appendLog("Loaded profile: " + profile.getPlayerName());
+        // Attach UI observer to active party so level-ups and related events
+        // are displayed in the adventure log.
+        registerUiObserversForProfile(profile);
         refreshPartySelectors();
         refreshRecruits();
         showStatus();
@@ -1294,6 +1479,7 @@ public class PlayDemoSwing {
 
         // After successful auth, ensure the action bar reflects signed-in state.
         try {
+            // Previously cleared the adventure log on login/signup — removed per request
             Profile current = game.getCurrentProfile();
             if (current != null) {
                 // Defer setting the post-signup action bar until after invite/match processing
@@ -1447,6 +1633,8 @@ public class PlayDemoSwing {
      */
     private void handleNewProfile(Profile profile) {
         if (profile == null) return;
+        // Ensure UI observer is attached so level-ups are logged.
+        registerUiObserversForProfile(profile);
         SwingUtilities.invokeLater(this::setActionBarPostSignup);
         if (profile.getActiveParty().isEmpty()) {
             SwingUtilities.invokeLater(this::showFirstHeroRecruitDialog);
@@ -1470,6 +1658,8 @@ public class PlayDemoSwing {
         }
 
         appendLog("Hero created: " + formatHero(hero));
+        // Ensure we will see level-ups and other hero events in the adventure log.
+        hero.addObserver(uiObserver);
         heroNameField.setText("");
         refreshPartySelectors();
         showStatus();
@@ -1495,6 +1685,41 @@ public class PlayDemoSwing {
     }
 
     /**
+     * Post-signup flow for starting a campaign. If a campaign is already present
+     * for the profile, ask for confirmation because starting a new campaign will
+     * override existing progress.
+     */
+    private void postsignup() {
+        ensureProfileSelected();
+        // Block campaign progression if the player has any active PvP duels
+        if (hasActivePvpMatches()) {
+            JOptionPane.showMessageDialog(null,
+                "You have an active PvP duel. Finish it before continuing your campaign.",
+                "Active Duel",
+                JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        Profile cur = game.getCurrentProfile();
+        if (cur != null && cur.getCampaignRoom() > 0) {
+            int resp = JOptionPane.showConfirmDialog(null,
+                    "You already have an in-progress campaign. Starting a new campaign will overwrite your current progress. Continue?",
+                    "Start New Campaign",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.WARNING_MESSAGE);
+            if (resp != JOptionPane.YES_OPTION) return;
+        }
+
+        // Start the campaign after confirmation (or if no prior campaign exists)
+        game.startCampaign();
+        appendLog("Campaign started. 30 rooms total.");
+        appendLog("Narrator: You enter the first corridor of the Sword-and-Wand labyrinth.");
+        appendLog("Narrator: Each room may hide enemies or shelter an inn.");
+        refreshRecruits();
+        SwingUtilities.invokeLater(this::setActionBarCampaign);
+    }
+
+    /**
      * Action bar layout while a campaign is active: two large centered buttons
      * for entering rooms and opening the inventory, plus small status/logout
      * controls.
@@ -1505,7 +1730,7 @@ public class PlayDemoSwing {
         JPanel center = new JPanel();
         center.setLayout(new java.awt.GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new java.awt.Insets(8, 40, 8, 40);
+        gbc.insets = new java.awt.Insets(8, 12, 8, 12);
 
         JButton enterRoomBig = makeActionButton("Enter Room", 28, 280, 80);
         enterRoomBig.addActionListener(e -> runUiAction(this::enterNextRoom));
@@ -1564,15 +1789,18 @@ public class PlayDemoSwing {
         JPanel center = new JPanel();
         center.setLayout(new java.awt.GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new java.awt.Insets(8, 40, 8, 40);
+        gbc.insets = new java.awt.Insets(8, 12, 8, 12);
 
-        JButton shopBtn = makeActionButton("Shop", 28, 280, 80);
+        JButton shopBtn = makeActionButton("Shop", 20, 180, 64);
         shopBtn.addActionListener(e -> SwingUtilities.invokeLater(this::showShopDialog));
 
-        JButton recruitBtn = makeActionButton("Recruit", 28, 200, 80);
+        JButton recruitBtn = makeActionButton("Recruit", 18, 160, 64);
         recruitBtn.addActionListener(e -> SwingUtilities.invokeLater(this::showRecruitDialog));
 
-        JButton leaveBtn = makeActionButton("Leave Inn", 28, 280, 80);
+        JButton trainBtn = makeActionButton("Train", 18, 160, 64);
+        trainBtn.addActionListener(e -> SwingUtilities.invokeLater(this::showTrainDialog));
+
+        JButton leaveBtn = makeActionButton("Leave Inn", 20, 180, 64);
         leaveBtn.addActionListener(e -> {
             appendLog("You leave the inn and return to the campaign.");
             setActionBarCampaign();
@@ -1583,6 +1811,8 @@ public class PlayDemoSwing {
         gbc.gridx = 1; gbc.gridy = 0;
         center.add(recruitBtn, gbc);
         gbc.gridx = 2; gbc.gridy = 0;
+        center.add(trainBtn, gbc);
+        gbc.gridx = 3; gbc.gridy = 0;
         center.add(leaveBtn, gbc);
 
         actionBarPanel.add(center, BorderLayout.CENTER);
@@ -1710,6 +1940,9 @@ public class PlayDemoSwing {
         if (encounter.isBattle()) {
             // switch action bar to battle mode while interactive battle runs on a background thread
             setActionBarBattle();
+            // Ensure UI observer is attached before the battle so level-up events
+            // that occur during the fight are captured in the adventure log.
+            registerUiObserversForProfile(game.getCurrentProfile());
             Thread battleThread = new Thread(() -> {
                 boolean won = runManualBattleInteractive(encounter);
                 CampaignResult resolved = game.resolveCampaignEncounter(encounter, won);
@@ -1936,21 +2169,7 @@ public class PlayDemoSwing {
     }
 
     private List<Hero> buildTurnOrder(List<Hero> party, List<Hero> enemies) {
-        List<Hero> order = new ArrayList<>();
-        for (Hero h : party) {
-            if (h.isAlive()) {
-                order.add(h);
-            }
-        }
-        for (Hero h : enemies) {
-            if (h.isAlive()) {
-                order.add(h);
-            }
-        }
-        order.sort(Comparator
-                .comparingInt(Hero::getLevel).reversed()
-                .thenComparingInt(Hero::getCurrentAttack).reversed());
-        return order;
+        return BattleEngine.buildTurnOrder(party, enemies);
     }
 
     private void runPlayerTurn(Hero hero, List<Hero> allies, List<Hero> enemies, Queue<Hero> waitQueue) {
@@ -2094,11 +2313,7 @@ public class PlayDemoSwing {
     }
 
     private Hero firstAliveExcept(List<Hero> list, Hero exclude) {
-        if (list == null) return null;
-        for (Hero h : list) {
-            if (h != null && h.isAlive() && h != exclude) return h;
-        }
-        return null;
+        return BattleEngine.firstAliveExcept(list, exclude);
     }
 
     private Ability chooseAbility(Hero hero, List<Ability> abilities) {
@@ -2174,34 +2389,19 @@ public class PlayDemoSwing {
     }
 
     private void tickStatuses(List<Hero> team) {
-        for (Hero hero : team) {
-            if (hero.isAlive()) {
-                hero.processStatusEffects();
-            }
-        }
+        BattleEngine.tickStatuses(team);
     }
 
     private boolean isTeamAlive(List<Hero> team) {
-        return team.stream().anyMatch(Hero::isAlive);
+        return BattleEngine.isTeamAlive(team);
     }
 
     private Hero firstAlive(List<Hero> team) {
-        for (Hero hero : team) {
-            if (hero.isAlive()) {
-                return hero;
-            }
-        }
-        return null;
+        return BattleEngine.firstAlive(team);
     }
 
     private List<Hero> aliveMembers(List<Hero> team) {
-        List<Hero> alive = new ArrayList<>();
-        for (Hero hero : team) {
-            if (hero.isAlive()) {
-                alive.add(hero);
-            }
-        }
-        return alive;
+        return BattleEngine.aliveMembers(team);
     }
 
     private String formatEnemyGroup(List<Hero> enemies) {
@@ -2329,6 +2529,10 @@ public class PlayDemoSwing {
             currentRecruitCandidates.remove(candidate);
             refreshRecruitsModelOnly();
             refreshPartySelectors();
+
+            // Register UI observer so recruit's level-ups/events appear in the log
+            Profile p = game.getCurrentProfile();
+            if (p != null) registerUiObserversForProfile(p);
 
             // Avoid creating a duplicate empty slot: if slot 0 exists but is empty
             // (created earlier by an auto-save), overwrite it. Otherwise append/save.
@@ -2469,6 +2673,8 @@ public class PlayDemoSwing {
         }
 
         setActionBarBattle();
+        // Attach UI observer for current profile so level-ups during PvP are logged.
+        registerUiObserversForProfile(game.getCurrentProfile());
         // record which player the UI snapshot represents (local caller)
         this.battleSnapshotOwner = playerName;
         Thread pvpThread = new Thread(() -> {
@@ -2519,6 +2725,8 @@ public class PlayDemoSwing {
         }
 
         setActionBarBattle();
+        // Attach UI observer for current profile so level-ups during persisted PvP are logged.
+        registerUiObserversForProfile(game.getCurrentProfile());
         // record current active persisted match for the UI/thread to use
         this.currentMatch = match;
         Thread pvpThread = new Thread(() -> {
@@ -2554,9 +2762,10 @@ public class PlayDemoSwing {
                     });
                 } else {
                     // Match not finished; local player's move was persisted and control returns to opponent.
+                    // The worker thread already logs a more specific "Move saved..." message, avoid duplicating it here.
                     SwingUtilities.invokeLater(() -> {
-                        appendLog("Turn saved. Waiting for opponent to make their move.");
                         setActionBarIdle();
+                        showStatus();
                     });
                 }
             } finally {
@@ -2811,15 +3020,7 @@ public class PlayDemoSwing {
 
     /** Deep-copy a party so the UI can run a local simulation without mutating stored profiles. */
     private List<Hero> deepCopyParty(List<Hero> src) {
-        List<Hero> out = new ArrayList<>();
-        for (Hero h : src) {
-            if (h == null) continue;
-            Hero copy = new Hero(h.getName(), h.getHeroClass());
-            // replicate level and basic stats by leveling up appropriately
-            for (int i = 1; i < h.getLevel(); i++) copy.levelUp(copy.getHeroClass());
-            out.add(copy);
-        }
-        return out;
+        return BattleEngine.deepCopyParty(src);
     }
 
     /**
@@ -2975,6 +3176,9 @@ public class PlayDemoSwing {
         ensureProfileSelected();
         Profile profile = game.getCurrentProfile();
 
+        // Ensure UI observer is attached so level-up events are shown in the adventure log.
+        registerUiObserversForProfile(profile);
+
         appendLog("=== Profile Status ===");
         appendLog("Player: " + profile.getPlayerName());
         appendLog("Gold: " + profile.getGold() + " | Campaign Room: " + profile.getCampaignRoom()
@@ -3016,11 +3220,98 @@ public class PlayDemoSwing {
 
         appendLog("Saved parties: " + profile.getSavedParties().size() + "/5");
         refreshPartySelectors();
+        // Offer hybridization choices if applicable (non-blocking invocation)
+        SwingUtilities.invokeLater(() -> offerHybridizationForProfile(profile));
+    }
+
+    /**
+     * Scans the active party and offers hybridization choices when a hero
+     * has reached multiple class thresholds (e.g., Warrior Lv5 + Mage Lv5).
+     * If player accepts, sets the hero's hybrid class and persists.
+     */
+    private void offerHybridizationForProfile(Profile profile) {
+        if (profile == null) return;
+        List<Hero> active = profile.getActiveParty();
+        if (active == null || active.isEmpty()) return;
+
+        for (Hero hero : new ArrayList<>(active)) {
+            if (hero == null) continue;
+            // Ensure fields reflect current levels
+            hero.recomputeSpecializationFromLevels();
+
+            // If already hybridized or no specialization, nothing to do
+            if (hero.getSpecializationClass() == null || hero.getHybridClass() != null) continue;
+
+            // If the hero's primary specialization has just reached level 5, prompt to pick any other class
+            HeroClass spec = hero.getSpecializationClass();
+            if (spec != null && hero.getClassLevel(spec) >= 5 && hero.getHybridClass() == null) {
+                java.util.List<HeroClass> options = new java.util.ArrayList<>();
+                for (HeroClass c : HeroClass.values()) if (c != spec) options.add(c);
+                // Ask the player if they want to choose a second class now
+                int pickNow = JOptionPane.showConfirmDialog(null,
+                        hero.getName() + " reached level 5 as " + spec.name() + ".\nWould you like to select a second class now?",
+                        "Select Secondary Class",
+                        JOptionPane.YES_NO_OPTION,
+                        JOptionPane.QUESTION_MESSAGE);
+                if (pickNow != JOptionPane.YES_OPTION) continue;
+
+                HeroClass chosen;
+                if (options.size() == 1) {
+                    chosen = options.get(0);
+                } else {
+                    Object sel = JOptionPane.showInputDialog(null, "Pick a secondary class for " + hero.getName() + ":", "Choose Secondary Class", JOptionPane.QUESTION_MESSAGE, null, options.toArray(new HeroClass[0]), options.get(0));
+                    if (!(sel instanceof HeroClass)) continue;
+                    chosen = (HeroClass) sel;
+                }
+
+                // Apply chosen secondary class as hybrid and persist
+                hero.setHybridClass(chosen);
+                appendLog(hero.getName() + " selected secondary class: " + chosen.name() + ". Now: " + hero.getSpecializationDisplayName());
+                try { game.save(); } catch (Exception ignored) {}
+
+                String info = "Hybridization applied. Check ability descriptions for special effects.";
+                if (spec == HeroClass.WARRIOR && chosen == HeroClass.MAGE) info = "You became a Warlock: you lose the Knight stun effect and gain mana-burn style effects (see ability descriptions).";
+                else if ((spec == HeroClass.WARRIOR && chosen == HeroClass.ORDER) || (spec == HeroClass.ORDER && chosen == HeroClass.WARRIOR)) info = "You became a Paladin: Berserker now heals you before attacking.";
+                JOptionPane.showMessageDialog(null, info, "Hybridized", JOptionPane.INFORMATION_MESSAGE);
+                continue;
+            }
+
+            // Existing behavior: if the hero has multiple classes at level 5, offer hybridization between them
+            java.util.List<HeroClass> high = new java.util.ArrayList<>();
+            for (HeroClass c : HeroClass.values()) {
+                if (hero.getClassLevel(c) >= 5) high.add(c);
+            }
+            if (high.size() < 2) continue;
+
+            java.util.List<HeroClass> options = new java.util.ArrayList<>(high);
+            if (hero.getSpecializationClass() != null) options.remove(hero.getSpecializationClass());
+            if (options.isEmpty()) continue;
+            HeroClass chosen;
+            if (options.size() == 1) {
+                chosen = options.get(0);
+            } else {
+                Object sel = JOptionPane.showInputDialog(null, "Pick class to hybridize with:", "Choose Hybrid", JOptionPane.QUESTION_MESSAGE, null, options.toArray(new HeroClass[0]), options.get(0));
+                if (!(sel instanceof HeroClass)) continue;
+                chosen = (HeroClass) sel;
+            }
+
+            hero.setHybridClass(chosen);
+            appendLog(hero.getName() + " hybridized: now " + hero.getSpecializationDisplayName());
+            try { game.save(); } catch (Exception ignored) {}
+
+            String info = "Hybridization applied. Check ability descriptions for special effects.";
+            if (hero.getSpecializationClass() == HeroClass.WARRIOR && chosen == HeroClass.MAGE) info = "You became a Warlock: you lose the Knight stun effect and gain mana-burn style effects (see ability descriptions).";
+            else if ((hero.getSpecializationClass() == HeroClass.WARRIOR && chosen == HeroClass.ORDER) || (hero.getSpecializationClass() == HeroClass.ORDER && chosen == HeroClass.WARRIOR)) info = "You became a Paladin: Berserker now heals you before attacking.";
+            JOptionPane.showMessageDialog(null, info, "Hybridized", JOptionPane.INFORMATION_MESSAGE);
+        }
+        // Refresh displays
+        refreshPartySelectors();
     }
 
     private static int computeExpToLevelUp(int level) {
-        // Match Hero.getExpToLevelUp() formula: 500 + 75*L + 20*L^2
-        return 500 + 75 * level + 20 * level * level;
+        // Match Hero.getExpToLevelUp() formula (reduced for testing):
+        // base 100 + 20*L + 10*L^2
+        return 10 + 20 * level + 10 * level * level;
     }
 
     private void ensurePlayerHasSavedParty(Profile player) {
@@ -3126,13 +3417,22 @@ public class PlayDemoSwing {
     }
 
     private String formatHero(Hero hero) {
-        return hero.getName()
-                + " [" + hero.getHeroClass() + " Lv" + hero.getLevel() + "]"
-                + " HP " + hero.getCurrentHealth() + "/" + hero.getCurrentMaxHealth()
-                + " | MP " + hero.getCurrentMana() + "/" + hero.getCurrentMaxMana()
-                + " | ATK " + hero.getCurrentAttack()
-                + " | DEF " + hero.getCurrentDefense()
-                + (hero.isAlive() ? "" : " (DOWN)");
+        StringBuilder sb = new StringBuilder();
+        sb.append(hero.getName()).append(" [").append(hero.getHeroClass()).append(" Lv").append(hero.getLevel()).append("]");
+
+        // Specialization / hybrid indicator (human-friendly)
+        String specDisplay = hero.getSpecializationDisplayName();
+        if (specDisplay != null && hero.getClassLevel(hero.getSpecializationClass()) >= 5) {
+            sb.append(" (").append(specDisplay).append(")");
+        }
+
+        sb.append(" HP ").append(hero.getCurrentHealth()).append("/").append(hero.getCurrentMaxHealth())
+          .append(" | MP ").append(hero.getCurrentMana()).append("/").append(hero.getCurrentMaxMana())
+          .append(" | ATK ").append(hero.getCurrentAttack())
+          .append(" | DEF ").append(hero.getCurrentDefense());
+
+        if (!hero.isAlive()) sb.append(" (DOWN)");
+        return sb.toString();
     }
 
     private class HeroRenderer extends DefaultListCellRenderer {
@@ -3142,7 +3442,12 @@ public class PlayDemoSwing {
                                                                 boolean cellHasFocus) {
             super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
             if (value instanceof Hero hero) {
-                setText(hero.getName() + " (Lv" + hero.getLevel() + " " + hero.getHeroClass() + ")");
+                String label = hero.getName() + " (Lv" + hero.getLevel() + " " + hero.getHeroClass() + ")";
+                String sd = hero.getSpecializationDisplayName();
+                if (sd != null && hero.getClassLevel(hero.getSpecializationClass()) >= 5) {
+                    label += " [" + sd + "]";
+                }
+                setText(label);
             }
             return this;
         }
@@ -3156,7 +3461,12 @@ public class PlayDemoSwing {
             super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
             if (value instanceof Hero hero) {
                 int cost = InnServiceImpl.recruitmentCost(hero.getLevel());
-                setText(hero.getName() + " (Lv" + hero.getLevel() + " " + hero.getHeroClass() + ", " + cost + "g)");
+                String label = hero.getName() + " (Lv" + hero.getLevel() + " " + hero.getHeroClass() + ", " + cost + "g)";
+                String sd2 = hero.getSpecializationDisplayName();
+                if (sd2 != null && hero.getClassLevel(hero.getSpecializationClass()) >= 5) {
+                    label += " [" + sd2 + "]";
+                }
+                setText(label);
             }
             return this;
         }

@@ -44,6 +44,9 @@ public class BerserkerAttack extends Ability {
         this.random = new Random();
     }
 
+    public boolean hasStunSplash() { return stunSplash; }
+    public boolean hasHealBeforeAttack() { return healBeforeAttack; }
+
     @Override
     public void execute(Hero caster, List<Hero> targets) {
         if (targets.isEmpty()) return;

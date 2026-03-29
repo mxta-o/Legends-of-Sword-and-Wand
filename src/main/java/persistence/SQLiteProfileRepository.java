@@ -370,8 +370,32 @@ public class SQLiteProfileRepository implements ProfileRepository {
                             Hero hero = new Hero(hrs.getString("hero_name"), heroClass);
                             int level = hrs.getInt("level");
                             for (int lvl = 1; lvl < level; lvl++) hero.levelUp(heroClass);
+                            // Restore experience progress if present
+                            try {
+                                int exp = hrs.getInt("experience");
+                                if (exp > 0) hero.gainExperience(exp);
+                            } catch (SQLException ignored) {}
+                            // Restore current health/mana by reducing from max if needed
+                            try {
+                                int desiredHp = hrs.getInt("current_health");
+                                int maxHp = hero.getCurrentMaxHealth();
+                                if (desiredHp < maxHp) {
+                                    int dmg = Math.max(0, maxHp - desiredHp);
+                                    hero.takeDamage(dmg);
+                                } else if (desiredHp > maxHp) {
+                                    hero.revive();
+                                }
+                                int desiredMana = hrs.getInt("current_mana");
+                                int maxMana = hero.getCurrentMaxMana();
+                                if (desiredMana < maxMana) {
+                                    int use = Math.max(0, maxMana - desiredMana);
+                                    hero.useMana(use);
+                                } else if (desiredMana > maxMana) {
+                                    hero.restoreMana(maxMana);
+                                }
+                            } catch (SQLException ignored) {}
                             if (hrs.getInt("is_alive") == 0 && hero.isAlive()) {
-                                hero.takeDamage(hero.getCurrentMaxHealth());
+                                hero.takeDamage(hero.getCurrentHealth());
                             }
                             party.add(hero);
                         }

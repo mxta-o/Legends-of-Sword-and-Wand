@@ -19,9 +19,11 @@ public interface HeroClassStrategy {
     void applyLevelBonus(Hero hero);
 
     /**
-     * Returns the list of abilities available to this class.
+     * Returns the list of abilities available to this class for the given hero.
+     * Implementations may inspect the hero's specialization/hybrid state to
+     * produce hybrid-flavored ability instances.
      */
-    List<Ability> getAbilities();
+    List<Ability> getAbilities(Hero hero);
 
     /**
      * Returns the display name of this class.

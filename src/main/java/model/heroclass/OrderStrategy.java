@@ -24,7 +24,8 @@ public class OrderStrategy implements HeroClassStrategy {
     }
 
     @Override
-    public List<Ability> getAbilities() {
+    public List<Ability> getAbilities(Hero hero) {
+        // Order abilities currently have no hero-specific hybrid flags here.
         return Arrays.asList(new Protect(), new Heal());
     }
 

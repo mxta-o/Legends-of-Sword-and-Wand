@@ -149,6 +149,17 @@ public class GameController {
      */
     public Profile loadProfile(String playerName) {
         currentProfile = profileService.loadProfile(playerName);
+        // Ensure specialization/hybrid fields are recomputed for loaded heroes
+        if (currentProfile != null) {
+            if (currentProfile.getActiveParty() != null) {
+                for (Hero h : currentProfile.getActiveParty()) if (h != null) h.recomputeSpecializationFromLevels();
+            }
+            if (currentProfile.getSavedParties() != null) {
+                for (List<Hero> slot : currentProfile.getSavedParties()) {
+                    for (Hero h : slot) if (h != null) h.recomputeSpecializationFromLevels();
+                }
+            }
+        }
         return currentProfile;
     }
 
@@ -161,6 +172,15 @@ public class GameController {
         if (p == null) return null;
         if (!p.verifyPassword(password)) return null;
         currentProfile = p;
+        // Recompute specialization/hybrid for heroes restored from storage
+        if (currentProfile.getActiveParty() != null) {
+            for (Hero h : currentProfile.getActiveParty()) if (h != null) h.recomputeSpecializationFromLevels();
+        }
+        if (currentProfile.getSavedParties() != null) {
+            for (List<Hero> slot : currentProfile.getSavedParties()) {
+                for (Hero h : slot) if (h != null) h.recomputeSpecializationFromLevels();
+            }
+        }
         return currentProfile;
     }
 
@@ -305,8 +325,9 @@ public class GameController {
         if (campaignService.isCampaignComplete(currentProfile)) {
             int score = currentProfile.getCampaignScore();
             System.out.printf("Campaign complete! Final score: %,d%n", score);
-            profileService.saveProfile(currentProfile);
         }
+        // Always persist profile after advancing a room so XP/gold/party changes are saved
+        profileService.saveProfile(currentProfile);
         return result;
     }
 
@@ -338,13 +359,12 @@ public class GameController {
 
         CampaignResult result = campaignImpl.resolveEncounter(currentProfile, encounter, battleWon);
         System.out.println(result);
-
         if (campaignService.isCampaignComplete(currentProfile)) {
             int score = currentProfile.getCampaignScore();
             System.out.printf("Campaign complete! Final score: %,d%n", score);
-            profileService.saveProfile(currentProfile);
         }
-
+        // Persist profile so any level/exp/gold changes are durable immediately
+        profileService.saveProfile(currentProfile);
         return result;
     }
 
@@ -386,6 +406,8 @@ public class GameController {
             } else {
                 System.out.printf("Purchased %s for %s.%n", item.getDisplayName(), targetHero.getName());
             }
+            // Persist profile changes (gold deduction / inventory) immediately
+            profileService.saveProfile(currentProfile);
         } else {
             System.out.printf("Not enough gold to buy %s (need %dg, have %dg).%n",
                     item.getDisplayName(), item.getCost(), currentProfile.getGold());

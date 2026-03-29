@@ -234,8 +234,8 @@ public class CampaignServiceImpl implements CampaignService {
      * Enemies have no special abilities — they can only ATTACK, DEFEND, or WAIT.
      */
     private List<Hero> generateEnemyParty(Profile profile) {
-        // 1 enemy per room for demo purposes
-        int partySize    = 1;
+        // 1–3 enemies per room for demo purposes
+        int partySize    = 1 + random.nextInt(2);
         int cumLevel     = Math.max(1, profile.getCumulativePartyLevel());
         int minCumLevel  = Math.max(1, cumLevel - 10);
         int targetCumLvl = minCumLevel + random.nextInt(Math.max(1, cumLevel - minCumLevel + 1));
@@ -266,7 +266,7 @@ public class CampaignServiceImpl implements CampaignService {
         }
         // For demo purposes, make level-1 goblins squishier so battles finish faster.
         for (Hero enemy : enemies) {
-            if (enemy.getLevel() <= 5) {
+            if (enemy.getLevel() <= 10) {
                 int desiredHp = 1;
                 int delta = desiredHp - enemy.getCurrentMaxHealth();
                 if (delta != 0) {

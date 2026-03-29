@@ -133,11 +133,11 @@ public class Hero {
         maxMana += 2;
         // Apply class-specific bonuses
         applyClassBonuses(classType);
-        // Specialization logic
+        // Specialization logic: set the first class to reach level 5 as specialization.
+        // Hybridization (choosing a second class) is handled via the UI prompt so
+        // we don't automatically assign `hybridClass` here.
         if (classLevels.get(classType) == 5 && specializationClass == null) {
             specializationClass = classType;
-        } else if (classLevels.get(classType) == 5 && specializationClass != null && hybridClass == null && specializationClass != classType) {
-            hybridClass = classType; // Now hybridized
         }
         notifyLevelUp(level);
     }
@@ -166,7 +166,33 @@ public class Hero {
 
     /** Returns the abilities available to this hero's current class strategy. */
     public List<Ability> getClassAbilities() {
-        return classStrategy.getAbilities();
+        return classStrategy.getAbilities(this);
+    }
+
+
+    public int getClassLevel(HeroClass c) {
+        return classLevels.getOrDefault(c, 0);
+    }
+
+    /**
+     * Re-evaluate specialization and hybrid fields based on current `classLevels`.
+     * Useful when a hero was loaded from persistence or mutated externally
+     * and you need to ensure `specializationClass` / `hybridClass` reflect
+     * classes that have reached level 5.
+     */
+    public void recomputeSpecializationFromLevels() {
+        // find all classes at or above level 5
+        java.util.List<HeroClass> high = new java.util.ArrayList<>();
+        for (java.util.Map.Entry<HeroClass, Integer> e : classLevels.entrySet()) {
+            if (e.getValue() >= 5) high.add(e.getKey());
+        }
+
+        if (high.isEmpty()) return;
+
+        // Ensure specialization is set to the first qualifying class if not already set
+        if (specializationClass == null && !high.isEmpty()) {
+            specializationClass = high.get(0);
+        }
     }
 
     /**
@@ -439,8 +465,9 @@ public class Hero {
     }
 
     private int getExpToLevelUp() {
-        // Example: Exp(L) = Exp(L-1)+500+75*L+20*L^2
-        return 500 + 75 * level + 20 * level * level;
+        // Reduced threshold for faster testing: base 100 + 20*L + 10*L^2
+        // (Previously 500 + 75*L + 20*L^2 — lowered to speed up leveling during development)
+        return 10 + 20 * level + 10 * level * level;
     }
 
     // Utility methods
@@ -497,5 +524,40 @@ public class Hero {
     }
     public HeroClass getHybridClass() {
         return hybridClass;
+    }
+
+    /**
+     * Human-friendly name for the hero's specialization or hybrid.
+     * Examples: WARRIOR -> "Knight", MAGE -> "Wizard", ORDER+WARRIOR -> "Paladin".
+     * Returns null if no specialization/hybrid is present.
+     */
+    public String getSpecializationDisplayName() {
+        if (specializationClass == null) return null;
+        // Hybrid specific names
+        if (hybridClass != null) {
+            // Paladin: Order + Warrior
+            if ((specializationClass == HeroClass.WARRIOR && hybridClass == HeroClass.ORDER)
+                    || (specializationClass == HeroClass.ORDER && hybridClass == HeroClass.WARRIOR)) {
+                return "Paladin";
+            }
+            // Fallback: combine names
+            return specializationClass.name() + "+" + hybridClass.name();
+        }
+
+        // Single-class specialization names
+        switch (specializationClass) {
+            case WARRIOR: return "Knight";
+            case MAGE: return "Wizard";
+            case ORDER: return "Priest";
+            case CHAOS: return "Dread"; // flavor name for Chaos specialization
+            default: return specializationClass.name();
+        }
+    }
+
+    /**
+     * Set the hero's hybrid class. Use when player chooses to hybridize.
+     */
+    public void setHybridClass(HeroClass hybrid) {
+        this.hybridClass = hybrid;
     }
 }

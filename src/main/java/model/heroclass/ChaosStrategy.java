@@ -24,7 +24,7 @@ public class ChaosStrategy implements HeroClassStrategy {
     }
 
     @Override
-    public List<Ability> getAbilities() {
+    public List<Ability> getAbilities(Hero hero) {
         return Arrays.asList(new Fireball(), new ChainLightning());
     }
 
