@@ -189,33 +189,10 @@ public class CampaignServiceImpl implements CampaignService {
                                                 List<Hero> enemies, boolean playerWon) {
         boolean finalWin = playerWon && isPlayerPartyAlive(profile);
         if (finalWin) {
-            int totalExp  = 0;
-            int totalGold = 0;
-            for (Hero enemy : enemies) {
-                totalExp  += 50 * enemy.getLevel();
-                totalGold += 75 * enemy.getLevel();
-            }
-
-            List<Hero> survivors = profile.getActiveParty().stream()
-                    .filter(Hero::isAlive)
-                    .collect(java.util.stream.Collectors.toList());
-
-            if (!survivors.isEmpty()) {
-                int expPerHero = totalExp / survivors.size();
-                survivors.forEach(h -> h.gainExperience(expPerHero));
-            }
-
-            profile.addGold(totalGold);
-
-            return new CampaignResult(CampaignResult.RoomType.BATTLE, roomNumber,
-                    true, totalExp, totalGold, survivors);
+            return applyVictoryRewards(profile, roomNumber, enemies);
         }
 
-        profile.applyGoldPenalty();
-        applyExpPenalty(profile.getActiveParty());
-        innService.visitInn(profile);
-        return new CampaignResult(CampaignResult.RoomType.BATTLE, roomNumber,
-                false, 0, 0, List.of());
+        return applyDefeatPenalty(profile, roomNumber);
     }
 
     private CampaignResult runInnRoom(Profile profile, int roomNumber) {
@@ -247,35 +224,9 @@ public class CampaignServiceImpl implements CampaignService {
 
         for (int i = 0; i < partySize; i++) {
             int level = Math.max(1, Math.min(10, levels[i]));
-            // Choose enemy class with a bias away from heavy-defense Warriors so
-            // player damage numbers are more meaningful in early demos.
-            HeroClass enemyClass;
-            double r = random.nextDouble();
-            if (r < 0.45) enemyClass = HeroClass.CHAOS;
-            else if (r < 0.75) enemyClass = HeroClass.MAGE;
-            else if (r < 0.95) enemyClass = HeroClass.ORDER;
-            else enemyClass = HeroClass.WARRIOR;
-            // Name enemies as Goblins for the demo; adjust here if you prefer
-            Hero enemy = new Hero("Goblin-" + (i + 1), enemyClass);
-            // Level up the enemy (base-class only, no specials)
-            for (int lvl = 1; lvl < level; lvl++) {
-                // Level up using the enemy's actual class so per-class bonuses apply correctly
-                enemy.levelUp(enemyClass);
-            }
-            enemies.add(enemy);
+            enemies.add(buildEnemy(level, i + 1));
         }
-        // For demo purposes, make level-1 goblins squishier so battles finish faster.
-        for (Hero enemy : enemies) {
-            if (enemy.getLevel() <= 10) {
-                int desiredHp = 1;
-                int delta = desiredHp - enemy.getCurrentMaxHealth();
-                if (delta != 0) {
-                    enemy.addMaxHealth(delta);
-                }
-                // Ensure current HP matches the new max
-                enemy.revive();
-            }
-        }
+        normalizeEnemyHealth(enemies);
 
         return enemies;
     }
@@ -300,6 +251,67 @@ public class CampaignServiceImpl implements CampaignService {
     private void applyExpPenalty(List<Hero> heroes) {
         for (Hero hero : heroes) {
             hero.applyExperiencePenalty(EXP_PENALTY);
+        }
+    }
+
+    private CampaignResult applyVictoryRewards(Profile profile, int roomNumber, List<Hero> enemies) {
+        int totalExp = 0;
+        int totalGold = 0;
+        for (Hero enemy : enemies) {
+            totalExp += 50 * enemy.getLevel();
+            totalGold += 75 * enemy.getLevel();
+        }
+
+        List<Hero> survivors = profile.getActiveParty().stream()
+                .filter(Hero::isAlive)
+                .collect(java.util.stream.Collectors.toList());
+
+        if (!survivors.isEmpty()) {
+            int expPerHero = totalExp / survivors.size();
+            survivors.forEach(h -> h.gainExperience(expPerHero));
+        }
+
+        profile.addGold(totalGold);
+
+        return new CampaignResult(CampaignResult.RoomType.BATTLE, roomNumber,
+                true, totalExp, totalGold, survivors);
+    }
+
+    private CampaignResult applyDefeatPenalty(Profile profile, int roomNumber) {
+        profile.applyGoldPenalty();
+        applyExpPenalty(profile.getActiveParty());
+        innService.visitInn(profile);
+        return new CampaignResult(CampaignResult.RoomType.BATTLE, roomNumber,
+                false, 0, 0, List.of());
+    }
+
+    private Hero buildEnemy(int level, int index) {
+        HeroClass enemyClass = pickEnemyClass();
+        Hero enemy = new Hero("Goblin-" + index, enemyClass);
+        for (int lvl = 1; lvl < level; lvl++) {
+            enemy.levelUp(enemyClass);
+        }
+        return enemy;
+    }
+
+    private HeroClass pickEnemyClass() {
+        double r = random.nextDouble();
+        if (r < 0.45) return HeroClass.CHAOS;
+        if (r < 0.75) return HeroClass.MAGE;
+        if (r < 0.95) return HeroClass.ORDER;
+        return HeroClass.WARRIOR;
+    }
+
+    private void normalizeEnemyHealth(List<Hero> enemies) {
+        for (Hero enemy : enemies) {
+            if (enemy.getLevel() <= 10) {
+                int desiredHp = 1;
+                int delta = desiredHp - enemy.getCurrentMaxHealth();
+                if (delta != 0) {
+                    enemy.addMaxHealth(delta);
+                }
+                enemy.revive();
+            }
         }
     }
 

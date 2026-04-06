@@ -4,10 +4,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.List;
 import java.util.ArrayList;
-import model.heroclass.OrderStrategy;
-import model.heroclass.ChaosStrategy;
-import model.heroclass.WarriorStrategy;
-import model.heroclass.MageStrategy;
+import java.util.function.ToIntFunction;
 
 /**
  * Represents a hero in the Legends of Sword and Wand RPG.
@@ -48,7 +45,7 @@ public class Hero {
         this.currentMana = 50;
         this.classLevels = new HashMap<>();
         this.classLevels.put(heroClass, 1);
-        this.classStrategy = createStrategy(heroClass);
+        this.classStrategy = heroClass.createStrategy();
         // Apply per-level bonuses for the initial class level (level 1)
         this.classStrategy.applyLevelBonus(this);
         // Ensure current HP/MP reflect any max changes from the class bonus
@@ -134,25 +131,15 @@ public class Hero {
         // Apply class-specific bonuses
         applyClassBonuses(classType);
         // Specialization logic: set the first class to reach level 5 as specialization.
-        // Hybridization (choosing a second class) is handled via the UI prompt so
-        // we don't automatically assign `hybridClass` here.
-        if (classLevels.get(classType) == 5 && specializationClass == null) {
-            specializationClass = classType;
+        // If a different class reaches level 5 later, mark it as the hybrid class.
+        if (classLevels.get(classType) == 5) {
+            if (specializationClass == null) {
+                specializationClass = classType;
+            } else if (hybridClass == null && specializationClass != classType) {
+                hybridClass = classType;
+            }
         }
         notifyLevelUp(level);
-    }
-
-    /**
-     * Factory: maps a HeroClass enum value to its Strategy implementation.
-     */
-    private HeroClassStrategy createStrategy(HeroClass classType) {
-        switch (classType) {
-            case ORDER:   return new OrderStrategy();
-            case CHAOS:   return new ChaosStrategy();
-            case WARRIOR: return new WarriorStrategy();
-            case MAGE:    return new MageStrategy();
-            default:      return new WarriorStrategy(); // fallback for HYBRID
-        }
     }
 
     /**
@@ -160,7 +147,7 @@ public class Hero {
      */
     private void applyClassBonuses(HeroClass classType) {
         // Update active strategy when levelling a different class
-        classStrategy = createStrategy(classType);
+        classStrategy = classType.createStrategy();
         classStrategy.applyLevelBonus(this);
     }
 
@@ -215,12 +202,7 @@ public class Hero {
     }
 
     private int getHybridAttackBonus() {
-        int bonus = 0;
-        if (specializationClass != null && hybridClass != null) {
-            bonus += getClassAttackBonus(specializationClass);
-            bonus += getClassAttackBonus(hybridClass);
-        }
-        return bonus;
+        return getHybridBonus(this::getClassAttackBonus);
     }
 
     private int getClassAttackBonus(HeroClass classType) {
@@ -248,12 +230,7 @@ public class Hero {
     }
 
     private int getHybridDefenseBonus() {
-        int bonus = 0;
-        if (specializationClass != null && hybridClass != null) {
-            bonus += getClassDefenseBonus(specializationClass);
-            bonus += getClassDefenseBonus(hybridClass);
-        }
-        return bonus;
+        return getHybridBonus(this::getClassDefenseBonus);
     }
 
     private int getClassDefenseBonus(HeroClass classType) {
@@ -279,12 +256,7 @@ public class Hero {
     }
 
     private int getHybridHealthBonus() {
-        int bonus = 0;
-        if (specializationClass != null && hybridClass != null) {
-            bonus += getClassHealthBonus(specializationClass);
-            bonus += getClassHealthBonus(hybridClass);
-        }
-        return bonus;
+        return getHybridBonus(this::getClassHealthBonus);
     }
 
     private int getClassHealthBonus(HeroClass classType) {
@@ -310,12 +282,12 @@ public class Hero {
     }
 
     private int getHybridManaBonus() {
-        int bonus = 0;
-        if (specializationClass != null && hybridClass != null) {
-            bonus += getClassManaBonus(specializationClass);
-            bonus += getClassManaBonus(hybridClass);
-        }
-        return bonus;
+        return getHybridBonus(this::getClassManaBonus);
+    }
+
+    private int getHybridBonus(ToIntFunction<HeroClass> bonusFn) {
+        if (specializationClass == null || hybridClass == null) return 0;
+        return bonusFn.applyAsInt(specializationClass) + bonusFn.applyAsInt(hybridClass);
     }
 
     private int getClassManaBonus(HeroClass classType) {
@@ -414,10 +386,8 @@ public class Hero {
      * max values: roughly 10% of max HP and 5% of max mana (minimum 1).
      */
     public void defend() {
-        int healAmount = Math.max(1, getCurrentMaxHealth() / 10); // ~10% max HP
-        int manaAmount = Math.max(1, getCurrentMaxMana() / 20);   // ~5% max MP
-        heal(healAmount);
-        restoreMana(manaAmount);
+        heal(10);
+        restoreMana(5);
     }
 
     /**
@@ -511,7 +481,7 @@ public class Hero {
         h.specializationClass = this.specializationClass;
         h.hybridClass = this.hybridClass;
         // Recreate strategy for the copied hero
-        h.classStrategy = h.createStrategy(h.heroClass);
+        h.classStrategy = h.heroClass.createStrategy();
         // Copy status effects shallowly (effects are immutable-like or will be reset on revive in practice)
         h.statusEffects = new java.util.ArrayList<>(this.statusEffects);
         // Observers intentionally not copied

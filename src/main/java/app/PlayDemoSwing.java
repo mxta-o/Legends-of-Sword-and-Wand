@@ -1999,6 +1999,82 @@ public class PlayDemoSwing {
         }
     }
 
+    private void refreshBattleSnapshots(List<Hero> party, List<Hero> enemies) {
+        battlePartySnapshot = new ArrayList<>(party);
+        battleEnemiesSnapshot = new ArrayList<>(enemies);
+    }
+
+    private void runInteractivePlayerTurn(Hero actor, List<Hero> enemies, String turnPrompt) {
+        currentBattleActor = actor;
+        playerAwaitingAction = true;
+        appendLog(turnPrompt + actor.getName() + " (use action bar)");
+        while (playerAwaitingAction && actor.isAlive() && isTeamAlive(enemies)) {
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        currentBattleActor = null;
+    }
+
+    private void resolveInteractiveWaitQueue(List<Hero> party, List<Hero> enemies, Queue<Hero> waitQueue) {
+        while (!waitQueue.isEmpty() && isTeamAlive(party) && isTeamAlive(enemies)) {
+            Hero waiter = waitQueue.poll();
+            if (waiter == null || !waiter.isAlive()) {
+                continue;
+            }
+
+            Hero target = party.contains(waiter) ? firstAlive(enemies) : firstAlive(party);
+            if (target != null) {
+                int dmg = waiter.attack(target);
+                appendLog(waiter.getName() + " (Wait) strikes " + target.getName() + " for " + dmg + " damage. (ATK "
+                        + waiter.getCurrentAttack() + " vs DEF " + target.getCurrentDefense() + ")");
+                pauseTurn();
+            }
+            refreshBattleSnapshots(party, enemies);
+        }
+    }
+
+    private void runInteractiveBattleRounds(List<Hero> party, List<Hero> enemies, Queue<Hero> waitQueue) {
+        int round = 1;
+        while (isTeamAlive(party) && isTeamAlive(enemies) && round <= MANUAL_BATTLE_ROUND_LIMIT) {
+            appendLog("");
+            appendLog("--- Round " + round + " ---");
+
+            tickStatuses(party);
+            tickStatuses(enemies);
+
+            List<Hero> turnOrder = buildTurnOrder(party, enemies);
+
+            for (Hero actor : turnOrder) {
+                if (!actor.isAlive()) {
+                    continue;
+                }
+                if (!isTeamAlive(party) || !isTeamAlive(enemies)) {
+                    break;
+                }
+                if (actor.isStunned()) {
+                    appendLog(actor.getName() + " is stunned and misses this turn.");
+                    continue;
+                }
+
+                if (party.contains(actor)) {
+                    runInteractivePlayerTurn(actor, enemies, "Player turn: ");
+                } else {
+                    runEnemyTurn(actor, enemies, party, waitQueue);
+                }
+                refreshBattleSnapshots(party, enemies);
+            }
+
+            resolveInteractiveWaitQueue(party, enemies, waitQueue);
+
+            appendLog("Party: " + summarizeTeam(party));
+            appendLog("Enemies: " + summarizeTeam(enemies));
+            round++;
+        }
+    }
+
     private boolean runManualBattle(CampaignEncounter encounter) {
         List<Hero> party = game.getCurrentProfile().getActiveParty();
         List<Hero> enemies = encounter.getEnemies();
@@ -2084,80 +2160,15 @@ public class PlayDemoSwing {
         List<Hero> party = game.getCurrentProfile().getActiveParty();
         List<Hero> enemies = encounter.getEnemies();
 
-        // take snapshots the UI code will read
-        battlePartySnapshot = new ArrayList<>(party);
-        battleEnemiesSnapshot = new ArrayList<>(enemies);
+        // reset and take snapshots the UI code will read
+        battleWaitQueue.clear();
+        refreshBattleSnapshots(party, enemies);
 
         appendLog("Battle Start: " + party.size() + " hero(es) vs " + enemies.size() + " enemy unit(s).");
         appendLog("Tip: Use the action bar buttons to control each hero during combat.");
 
         battleInProgress = true;
-        int round = 1;
-        while (isTeamAlive(party) && isTeamAlive(enemies) && round <= MANUAL_BATTLE_ROUND_LIMIT) {
-            appendLog("");
-            appendLog("--- Round " + round + " ---");
-
-            tickStatuses(party);
-            tickStatuses(enemies);
-
-            List<Hero> turnOrder = buildTurnOrder(party, enemies);
-
-            for (Hero actor : turnOrder) {
-                if (!actor.isAlive()) continue;
-                if (!isTeamAlive(party) || !isTeamAlive(enemies)) break;
-                if (actor.isStunned()) {
-                    appendLog(actor.getName() + " is stunned and misses this turn.");
-                    continue;
-                }
-
-                if (party.contains(actor)) {
-                    // Player-controlled hero: wait for action bar input
-                    currentBattleActor = actor;
-                    playerAwaitingAction = true;
-                    appendLog("Player turn: " + actor.getName() + " (use action bar)");
-                    // busy-wait until player performs an action via the action bar
-                    while (playerAwaitingAction && actor.isAlive() && isTeamAlive(enemies)) {
-                        try { Thread.sleep(50); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
-                    }
-                    currentBattleActor = null;
-                } else {
-                    // Enemy AI
-                    runEnemyTurn(actor, enemies, party, battleWaitQueue);
-                }
-                // update snapshots
-                battlePartySnapshot = new ArrayList<>(party);
-                battleEnemiesSnapshot = new ArrayList<>(enemies);
-            }
-
-            // resolve waitQueue
-            while (!battleWaitQueue.isEmpty() && isTeamAlive(party) && isTeamAlive(enemies)) {
-                Hero waiter = battleWaitQueue.poll();
-                if (waiter == null || !waiter.isAlive()) continue;
-                if (party.contains(waiter)) {
-                    Hero target = firstAlive(enemies);
-                    if (target != null) {
-                        int dmg = waiter.attack(target);
-                        appendLog(waiter.getName() + " (Wait) strikes " + target.getName() + " for " + dmg + " damage. (ATK "
-                                + waiter.getCurrentAttack() + " vs DEF " + target.getCurrentDefense() + ")");
-                        pauseTurn();
-                    }
-                } else {
-                    Hero target = firstAlive(party);
-                    if (target != null) {
-                        int dmg = waiter.attack(target);
-                        appendLog(waiter.getName() + " (Wait) strikes " + target.getName() + " for " + dmg + " damage. (ATK "
-                                + waiter.getCurrentAttack() + " vs DEF " + target.getCurrentDefense() + ")");
-                        pauseTurn();
-                    }
-                }
-                battlePartySnapshot = new ArrayList<>(party);
-                battleEnemiesSnapshot = new ArrayList<>(enemies);
-            }
-
-            appendLog("Party: " + summarizeTeam(party));
-            appendLog("Enemies: " + summarizeTeam(enemies));
-            round++;
-        }
+        runInteractiveBattleRounds(party, enemies, battleWaitQueue);
 
         battleInProgress = false;
         boolean won = isTeamAlive(party) && !isTeamAlive(enemies);
@@ -2870,13 +2881,7 @@ public class PlayDemoSwing {
             // If it's the local player's turn, allow them to act; otherwise persist and wait.
             local = game.getCurrentProfile() == null ? null : game.getCurrentProfile().getPlayerName();
             if (currentTurnPlayer.equals(local)) {
-                currentBattleActor = actor;
-                playerAwaitingAction = true;
-                appendLog("Your turn: " + actor.getName() + " (use action bar)");
-                while (playerAwaitingAction && actor.isAlive() && isTeamAlive(actorIsA ? enemies : party)) {
-                    try { Thread.sleep(50); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
-                }
-                currentBattleActor = null;
+                runInteractivePlayerTurn(actor, actorIsA ? enemies : party, "Your turn: ");
 
                 // After local action, check if match ended
                 boolean aAlive = isTeamAlive(party);
@@ -2961,75 +2966,14 @@ public class PlayDemoSwing {
      */
     private BattleResult runManualPvpInteractive(List<Hero> party, List<Hero> enemies) {
         // Reuse the same UI-driven manual battle loop used for campaign encounters.
-        battlePartySnapshot = new ArrayList<>(party);
-        battleEnemiesSnapshot = new ArrayList<>(enemies);
+        battleWaitQueue.clear();
+        refreshBattleSnapshots(party, enemies);
 
         appendLog("PvP Start: " + party.size() + " hero(es) vs " + enemies.size() + " enemy unit(s).");
         appendLog("Tip: Use the action bar buttons to control each hero during combat.");
 
         battleInProgress = true;
-        int round = 1;
-        while (isTeamAlive(party) && isTeamAlive(enemies) && round <= MANUAL_BATTLE_ROUND_LIMIT) {
-            appendLog("");
-            appendLog("--- Round " + round + " ---");
-
-            tickStatuses(party);
-            tickStatuses(enemies);
-
-            List<Hero> turnOrder = buildTurnOrder(party, enemies);
-
-            for (Hero actor : turnOrder) {
-                if (!actor.isAlive()) continue;
-                if (!isTeamAlive(party) || !isTeamAlive(enemies)) break;
-                if (actor.isStunned()) {
-                    appendLog(actor.getName() + " is stunned and misses this turn.");
-                    continue;
-                }
-
-                if (party.contains(actor)) {
-                    currentBattleActor = actor;
-                    playerAwaitingAction = true;
-                    appendLog("Player turn: " + actor.getName() + " (use action bar)");
-                    while (playerAwaitingAction && actor.isAlive() && isTeamAlive(enemies)) {
-                        try { Thread.sleep(50); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
-                    }
-                    currentBattleActor = null;
-                } else {
-                    runEnemyTurn(actor, enemies, party, battleWaitQueue);
-                }
-
-                battlePartySnapshot = new ArrayList<>(party);
-                battleEnemiesSnapshot = new ArrayList<>(enemies);
-            }
-
-            while (!battleWaitQueue.isEmpty() && isTeamAlive(party) && isTeamAlive(enemies)) {
-                Hero waiter = battleWaitQueue.poll();
-                if (waiter == null || !waiter.isAlive()) continue;
-                if (party.contains(waiter)) {
-                    Hero target = firstAlive(enemies);
-                    if (target != null) {
-                        int dmg = waiter.attack(target);
-                        appendLog(waiter.getName() + " (Wait) strikes " + target.getName() + " for " + dmg + " damage. (ATK "
-                                + waiter.getCurrentAttack() + " vs DEF " + target.getCurrentDefense() + ")");
-                        pauseTurn();
-                    }
-                } else {
-                    Hero target = firstAlive(party);
-                    if (target != null) {
-                        int dmg = waiter.attack(target);
-                        appendLog(waiter.getName() + " (Wait) strikes " + target.getName() + " for " + dmg + " damage. (ATK "
-                                + waiter.getCurrentAttack() + " vs DEF " + target.getCurrentDefense() + ")");
-                        pauseTurn();
-                    }
-                }
-                battlePartySnapshot = new ArrayList<>(party);
-                battleEnemiesSnapshot = new ArrayList<>(enemies);
-            }
-
-            appendLog("Party: " + summarizeTeam(party));
-            appendLog("Enemies: " + summarizeTeam(enemies));
-            round++;
-        }
+        runInteractiveBattleRounds(party, enemies, battleWaitQueue);
 
         battleInProgress = false;
         boolean aAlive = isTeamAlive(party);

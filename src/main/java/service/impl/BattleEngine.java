@@ -13,6 +13,9 @@ import java.util.Queue;
  * Centralized battle engine used by UI and services.
  */
 public class BattleEngine {
+    private static final int MAX_NO_DAMAGE_ROUNDS = 50;
+    private static final int MAX_TURNS = 1000;
+    private static final double DEFEND_HP_THRESHOLD = 0.25;
 
     public static List<Hero> buildTurnOrder(List<Hero> party, List<Hero> enemies) {
         List<Hero> order = new ArrayList<>();
@@ -110,8 +113,8 @@ public class BattleEngine {
             takeTurn(teamBCopy, teamACopy);
             int totalHpAfter = totalTeamHp(teamACopy) + totalTeamHp(teamBCopy);
             if (totalHpAfter == totalHpBefore) consecutiveNoDamageRounds++; else consecutiveNoDamageRounds = 0;
-            if (consecutiveNoDamageRounds >= 50) { isDraw = true; break; }
-            turn++; if (turn > 1000) { isDraw = true; break; }
+            if (shouldDeclareDraw(consecutiveNoDamageRounds, turn)) { isDraw = true; break; }
+            turn++;
         }
 
         List<Hero> winningTeam = isTeamAlive(teamACopy) ? teamACopy : (isTeamAlive(teamBCopy) ? teamBCopy : new ArrayList<>());
@@ -144,7 +147,7 @@ public class BattleEngine {
     private static Action decideAction(Hero hero, List<Hero> enemies) {
         for (Ability ability : hero.getClassAbilities()) if (hero.canCast(ability)) return Action.CAST;
         double hpPercent = (double) hero.getCurrentHealth() / Math.max(1, hero.getCurrentMaxHealth());
-        if (hpPercent < 0.25) return Action.DEFEND;
+        if (hpPercent < DEFEND_HP_THRESHOLD) return Action.DEFEND;
         return Action.ATTACK;
     }
 
@@ -187,6 +190,10 @@ public class BattleEngine {
         if (team == null) return 0;
         for (Hero h : team) if (h != null) sum += h.getCurrentHealth();
         return sum;
+    }
+
+    private static boolean shouldDeclareDraw(int consecutiveNoDamageRounds, int turn) {
+        return consecutiveNoDamageRounds >= MAX_NO_DAMAGE_ROUNDS || turn > MAX_TURNS;
     }
 
     private enum Action { ATTACK, DEFEND, CAST, WAIT }

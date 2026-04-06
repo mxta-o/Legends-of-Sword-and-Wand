@@ -150,16 +150,7 @@ public class GameController {
     public Profile loadProfile(String playerName) {
         currentProfile = profileService.loadProfile(playerName);
         // Ensure specialization/hybrid fields are recomputed for loaded heroes
-        if (currentProfile != null) {
-            if (currentProfile.getActiveParty() != null) {
-                for (Hero h : currentProfile.getActiveParty()) if (h != null) h.recomputeSpecializationFromLevels();
-            }
-            if (currentProfile.getSavedParties() != null) {
-                for (List<Hero> slot : currentProfile.getSavedParties()) {
-                    for (Hero h : slot) if (h != null) h.recomputeSpecializationFromLevels();
-                }
-            }
-        }
+        recomputeSpecializations(currentProfile);
         return currentProfile;
     }
 
@@ -173,14 +164,7 @@ public class GameController {
         if (!p.verifyPassword(password)) return null;
         currentProfile = p;
         // Recompute specialization/hybrid for heroes restored from storage
-        if (currentProfile.getActiveParty() != null) {
-            for (Hero h : currentProfile.getActiveParty()) if (h != null) h.recomputeSpecializationFromLevels();
-        }
-        if (currentProfile.getSavedParties() != null) {
-            for (List<Hero> slot : currentProfile.getSavedParties()) {
-                for (Hero h : slot) if (h != null) h.recomputeSpecializationFromLevels();
-            }
-        }
+        recomputeSpecializations(currentProfile);
         return currentProfile;
     }
 
@@ -473,36 +457,13 @@ public class GameController {
 
         // Ensure both sides start the PvP fight fully healthy (revived, not stunned,
         // no active shield) so the battle system runs deterministically.
-        for (Hero h : partyA) {
-            if (h != null) {
-                h.revive();
-                h.setStunned(false);
-                h.setShieldAmount(0);
-            }
-        }
-        for (Hero h : partyB) {
-            if (h != null) {
-                h.revive();
-                h.setStunned(false);
-                h.setShieldAmount(0);
-            }
-        }
+        resetPartyForPvp(partyA);
+        resetPartyForPvp(partyB);
 
         BattleResult result = battleService.startBattle(partyA, partyB);
 
         // Record league result (no exp or gold awarded in PvP)
-        if (!result.isDraw()) {
-            boolean aWon = result.getWinningTeam().stream().anyMatch(h -> partyA.contains(h));
-            if (aWon) {
-                leagueService.recordResult(playerAName, playerBName);
-                profileA.addPvpWin();
-                profileB.addPvpLoss();
-            } else {
-                leagueService.recordResult(playerBName, playerAName);
-                profileB.addPvpWin();
-                profileA.addPvpLoss();
-            }
-        }
+        applyPvpResult(result, playerAName, playerBName, partyA, profileA, profileB);
 
         profileService.saveProfile(profileA);
         profileService.saveProfile(profileB);
@@ -526,16 +487,7 @@ public class GameController {
         }
 
         if (!result.isDraw()) {
-            boolean aWon = result.getWinningTeam().stream().anyMatch(p -> partyA.contains(p));
-            if (aWon) {
-                leagueService.recordResult(playerAName, playerBName);
-                profileA.addPvpWin();
-                profileB.addPvpLoss();
-            } else {
-                leagueService.recordResult(playerBName, playerAName);
-                profileB.addPvpWin();
-                profileA.addPvpLoss();
-            }
+            applyPvpResult(result, playerAName, playerBName, partyA, profileA, profileB);
         }
 
         profileService.saveProfile(profileA);
@@ -656,6 +608,43 @@ public class GameController {
     private void requireProfile() {
         if (currentProfile == null) {
             throw new IllegalStateException("No active profile. Call createProfile() or loadProfile() first.");
+        }
+    }
+
+    private void recomputeSpecializations(Profile profile) {
+        if (profile == null) return;
+        if (profile.getActiveParty() != null) {
+            for (Hero h : profile.getActiveParty()) if (h != null) h.recomputeSpecializationFromLevels();
+        }
+        if (profile.getSavedParties() != null) {
+            for (List<Hero> slot : profile.getSavedParties()) {
+                for (Hero h : slot) if (h != null) h.recomputeSpecializationFromLevels();
+            }
+        }
+    }
+
+    private void resetPartyForPvp(List<Hero> party) {
+        for (Hero h : party) {
+            if (h != null) {
+                h.revive();
+                h.setStunned(false);
+                h.setShieldAmount(0);
+            }
+        }
+    }
+
+    private void applyPvpResult(BattleResult result, String playerAName, String playerBName,
+                                List<Hero> partyA, Profile profileA, Profile profileB) {
+        if (result.isDraw()) return;
+        boolean aWon = result.getWinningTeam().stream().anyMatch(partyA::contains);
+        if (aWon) {
+            leagueService.recordResult(playerAName, playerBName);
+            profileA.addPvpWin();
+            profileB.addPvpLoss();
+        } else {
+            leagueService.recordResult(playerBName, playerAName);
+            profileB.addPvpWin();
+            profileA.addPvpLoss();
         }
     }
 }
